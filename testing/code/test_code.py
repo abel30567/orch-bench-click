@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Generator
 import re
 import sys
 from types import FrameType
@@ -17,7 +18,9 @@ from _pytest._code.code import ReprFuncArgs
 from _pytest._code.code import Traceback
 from _pytest._code.source import _statement_linenos
 from _pytest._code.source import get_statement_startend2
+from _pytest.config import ExitCode
 from _pytest.pytester import Pytester
+from _pytest.pytester import RunResult
 import pytest
 
 
@@ -275,6 +278,89 @@ class TestTruncateRecursiveTraceback:
 
         result = pytester.runpytest("--full-trace")
         result.stdout.no_fnmatch_line("*origin of the recursion could not be located*")
+        self.assert_all_frames_shown(result)
+
+    @staticmethod
+    def assert_all_frames_shown(result: RunResult) -> None:
+        output = "\n".join(result.outlines + result.errlines)
+        assert "to see all frames" not in output
+        # The exact number depends on the stack depth of the run.
+        assert output.count("f(x + 1)") > 100
+
+    def test_full_trace_conftest_import_failure(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def f(x):
+                return f(x + 1)
+
+            f(0)
+            """
+        )
+
+        result = pytester.runpytest()
+        result.stderr.fnmatch_lines(["*Pass `--full-trace` to see all frames."])
+
+        self.assert_all_frames_shown(pytester.runpytest("--full-trace"))
+
+    def test_full_trace_internal_error(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def f(x):
+                return f(x + 1)
+
+            def pytest_runtest_logreport(report):
+                f(0)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+
+        result = pytester.runpytest("--full-trace")
+
+        assert result.ret == ExitCode.INTERNAL_ERROR
+        self.assert_all_frames_shown(result)
+
+    @pytest.mark.parametrize("exception", ["ImportError", "SyntaxError"])
+    def test_full_trace_module_import_failure(
+        self, pytester: Pytester, exception: str
+    ) -> None:
+        pytester.makepyfile(
+            f"""
+            def f(x):
+                return f(x + 1)
+
+            try:
+                f(0)
+            except RecursionError as e:
+                raise {exception}("failed") from e
+            """
+        )
+
+        self.assert_all_frames_shown(pytester.runpytest("--full-trace"))
+
+
+def test_recursionindex_ignores_reentered_frame() -> None:
+    """A frame re-entered by throwing into a generator is not recursion (#14903)."""
+
+    def wrapper(unique_locals: int) -> Generator[None]:
+        yield
+
+    def rethrow() -> None:
+        exception = ValueError()
+        for gen in generators:
+            next(gen)
+            try:
+                gen.throw(exception)
+            except ValueError as e:
+                exception = e
+        raise exception
+
+    generators = [wrapper(0), wrapper(1)]
+    with pytest.raises(ValueError) as excinfo:
+        rethrow()
+
+    traceback = excinfo.traceback
+    assert len({id(entry.frame.raw) for entry in traceback}) < len(traceback)
+    assert traceback.recursionindex() is None
 
 
 def test_statement_linenos_memoized() -> None:

@@ -447,7 +447,15 @@ class Traceback(list[TracebackEntry]):
         """Return the index of the frame/TracebackEntry where recursion originates if
         appropriate, None if no recursion occurred."""
         cache: dict[tuple[Any, int, int], list[dict[str, Any]]] = {}
+        seen_frames: set[int] = set()
         for i, entry in enumerate(self):
+            # A frame which is listed again was re-entered, for example by
+            # throwing the exception into a generator. That's not recursion,
+            # which always creates a new frame.
+            frame_id = id(entry.frame.raw)
+            if frame_id in seen_frames:
+                continue
+            seen_frames.add(frame_id)
             # id for the code.raw is needed to work around
             # the strange metaprogramming in the decorator lib from pypi
             # which generates code objects that have hash/value equality
