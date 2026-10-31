@@ -83,8 +83,9 @@ the warning for custom marks by registering them in your configuration file or
 using a custom ``pytest_configure`` hook.
 
 When the :confval:`strict_markers` configuration option is set, any unknown marks applied
-with the ``@pytest.mark.name_of_the_mark`` decorator will trigger an error. You can
-enforce this validation in your project by setting :confval:`strict_markers` in your configuration:
+with the ``@pytest.mark.name_of_the_mark`` decorator or used in the ``-m`` expression
+will trigger an error. You can enforce this validation in your project by setting
+:confval:`strict_markers` in your configuration:
 
 .. tab:: toml
 

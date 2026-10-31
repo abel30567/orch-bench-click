@@ -16,6 +16,7 @@ from _pytest.config import ExitCode
 from _pytest.fixtures import FixtureRequest
 from _pytest.main import _in_venv
 from _pytest.main import Session
+from _pytest.mark.expression import Expression
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.nodes import Item
 from _pytest.pathlib import symlink_or_skip
@@ -2797,3 +2798,100 @@ def test_strict_parametrization_ids_with_hidden_param(pytester: Pytester) -> Non
             "Duplicates:     a",
         ]
     )
+
+
+class TestStrictMarkersInMarkExpression:
+    @pytest.fixture(autouse=True)
+    def setup_test_file(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.registered(value=1)
+            def test_marked(): pass
+
+            def test_unmarked(): pass
+            """
+        )
+
+    @pytest.mark.parametrize(
+        "ini_line",
+        ["strict_markers = true", "strict = true"],
+    )
+    @pytest.mark.parametrize(
+        ("expression", "names"),
+        [
+            ("typo", "typo"),
+            ("not typo", "typo"),
+            ("registered or zzz or typo", "typo, zzz"),
+            ("typo(registered=1)", "typo"),
+        ],
+    )
+    def test_unknown_marker_is_usage_error(
+        self, pytester: Pytester, ini_line: str, expression: str, names: str
+    ) -> None:
+        pytester.makeini(f"[pytest]\nmarkers = registered\n{ini_line}")
+        result = pytester.runpytest("-m", expression)
+        assert result.ret == ExitCode.USAGE_ERROR
+        assert (
+            f"ERROR: Unknown marker(s) in '-m' expression: {names}"
+            in result.stderr.lines
+        )
+
+    def test_command_line_flag(self, pytester: Pytester) -> None:
+        pytester.makeini("[pytest]\nmarkers = registered")
+        result = pytester.runpytest("--strict-markers", "-m", "typo")
+        assert result.ret == ExitCode.USAGE_ERROR
+
+    @pytest.mark.parametrize(
+        "marker_line",
+        ["registered", "registered: description", "registered(value): description"],
+    )
+    def test_registered_marker_forms(
+        self, pytester: Pytester, marker_line: str
+    ) -> None:
+        pytester.makeini(f"[pytest]\nstrict_markers = true\nmarkers = {marker_line}")
+        result = pytester.runpytest("-m", "registered(value=1) and not skip")
+        result.assert_outcomes(passed=1, deselected=1)
+
+    def test_marker_registered_in_conftest(self, pytester: Pytester) -> None:
+        pytester.makeini("[pytest]\nstrict_markers = true")
+        pytester.makeconftest(
+            """
+            def pytest_configure(config):
+                config.addinivalue_line("markers", "registered: description")
+            """
+        )
+        result = pytester.runpytest("-m", "registered")
+        result.assert_outcomes(passed=1, deselected=1)
+
+    def test_strict_markers_false_overrides_strict(self, pytester: Pytester) -> None:
+        pytester.makeini(
+            "[pytest]\nmarkers = registered\nstrict = true\nstrict_markers = false"
+        )
+        result = pytester.runpytest("-m", "typo")
+        result.assert_outcomes(deselected=2)
+
+    def test_not_strict(self, pytester: Pytester) -> None:
+        pytester.makeini("[pytest]\nmarkers = registered")
+        result = pytester.runpytest("-m", "typo")
+        result.assert_outcomes(deselected=2)
+
+    def test_keyword_expression_not_validated(self, pytester: Pytester) -> None:
+        pytester.makeini("[pytest]\nmarkers = registered\nstrict_markers = true")
+        result = pytester.runpytest("-k", "test_unmarked")
+        result.assert_outcomes(passed=1, deselected=1)
+
+
+@pytest.mark.parametrize(
+    ("expression", "idents"),
+    [
+        ("", set()),
+        ("foo", {"foo"}),
+        ("not (foo and bar) or foo", {"foo", "bar"}),
+        ("True or None", {"True", "None"}),
+        ("foo(bar=1, baz='qux', quux=True)", {"foo"}),
+    ],
+)
+def test_expression_idents(expression: str, idents: set[str]) -> None:
+    assert Expression.compile(expression).idents() == idents
