@@ -1748,3 +1748,151 @@ def test_collection_hierarchy(pytester: Pytester) -> None:
         ],
         consecutive=True,
     )
+
+
+@pytest.mark.filterwarnings("default::pytest.PytestWarning")
+class TestFixtureDiscovery:
+    def test_subclass_of_fixture_definition_is_discovered(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+            from _pytest.fixtures import FixtureFunctionDefinition
+
+            class MyDefinition(FixtureFunctionDefinition):
+                extra = "x"
+
+            def my_fixture(func):
+                definition = pytest.fixture(func)
+                definition.__class__ = MyDefinition
+                return definition
+
+            @my_fixture
+            def value():
+                return 42
+
+            class TestIt:
+                @my_fixture
+                def method_value(self):
+                    return self.__class__.__name__
+
+                def test_method(self, value, method_value):
+                    assert value == 42
+                    assert method_value == "TestIt"
+                    assert type(TestIt.__dict__["method_value"].__get__(self)) is MyDefinition
+
+            def test_value(value):
+                assert value == 42
+            """
+        )
+        result = pytester.runpytest("-W", "error::pytest.PytestWarning")
+        result.assert_outcomes(passed=2)
+
+    def test_fixture_wrapped_in_decorator(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import functools
+            import pytest
+
+            def deco(func):
+                @functools.wraps(func)
+                def wrapper(*args, **kwargs):
+                    return func(*args, **kwargs)
+                return wrapper
+
+            @deco
+            @pytest.fixture
+            def wrapped():
+                return 1
+
+            def test_it(wrapped):
+                pass
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'wrapped' not found*",
+                "*test_fixture_wrapped_in_decorator.py:*: PytestWarning: "
+                "cannot discover fixture 'wrapped' due to being wrapped in decorators",
+            ]
+        )
+
+    def test_classmethod_above_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @classmethod
+                @pytest.fixture
+                def cm(cls):
+                    return cls
+
+                def test_it(self, cm):
+                    pass
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'cm' not found*",
+                "*test_classmethod_above_fixture.py:*: PytestWarning: "
+                "cannot discover fixture 'cm' because it is wrapped by @classmethod; "
+                "place @pytest.fixture above @classmethod",
+            ]
+        )
+
+    def test_staticmethod_above_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @staticmethod
+                @pytest.fixture
+                def sm():
+                    return 3
+
+                def test_it(self, sm):
+                    assert sm == 3
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*test_staticmethod_above_fixture.py:*: PytestWarning: "
+                "fixture 'sm' is wrapped by @staticmethod above @pytest.fixture; "
+                "place @pytest.fixture above @staticmethod",
+            ]
+        )
+
+    def test_fixture_above_classmethod_and_staticmethod(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @pytest.fixture
+                @classmethod
+                def cm(cls):
+                    return cls
+
+                @pytest.fixture
+                @staticmethod
+                def sm():
+                    return 3
+
+                def test_it(self, cm, sm):
+                    assert cm is TestIt
+                    assert sm == 3
+            """
+        )
+        result = pytester.runpytest("-W", "error::pytest.PytestWarning")
+        result.assert_outcomes(passed=1)

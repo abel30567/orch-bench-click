@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+import copy
 import dataclasses
 import functools
 import inspect
@@ -191,6 +192,88 @@ def getfixturemarker(obj: object) -> FixtureFunctionMarker | None:
     if isinstance(obj, FixtureFunctionDefinition):
         return obj._fixture_function_marker
     return None
+
+
+def _is_fixture_definition(obj: object) -> bool:
+    # Check the real type rather than using isinstance(), which consults
+    # ``__class__`` and can be fooled by proxies/mocks.
+    return issubclass(type(obj), FixtureFunctionDefinition)
+
+
+def _warn_at_fixture(definition: FixtureFunctionDefinition, message: str) -> None:
+    """Issue a PytestWarning pointing at the definition of the fixture function."""
+    warning = PytestWarning(message)
+    func = get_real_func(definition._get_wrapped_function())
+    func = getattr(func, "__func__", func)
+    try:
+        filename = inspect.getfile(func)
+        lineno = func.__code__.co_firstlineno
+    except (TypeError, AttributeError):
+        warnings.warn(warning, stacklevel=3)
+        return
+    try:
+        warnings.warn_explicit(
+            warning,
+            PytestWarning,
+            filename=filename,
+            lineno=lineno,
+            module=getattr(func, "__module__", None),
+            registry=getattr(func, "__globals__", {}).setdefault(
+                "__warningregistry__", {}
+            ),
+        )
+    except Warning as w:
+        # With -Werror the location gets lost, so add it to the message.
+        raise type(w)(f"{w}\n at {filename}:{lineno}") from None
+
+
+def _check_fixture_wrapping(holderobj: object, name: str, obj_ub: object) -> bool:
+    """Warn about fixture definitions hidden behind other decorators.
+
+    Returns False if the attribute must not be discovered as a fixture.
+    """
+    try:
+        raw = inspect.getattr_static(holderobj, name, None)
+    except Exception:
+        raw = None
+    if issubclass(type(raw), (classmethod, staticmethod)):
+        inner = cast(
+            "classmethod[Any, Any, Any] | staticmethod[Any, Any]", raw
+        ).__func__
+        if _is_fixture_definition(inner):
+            assert isinstance(inner, FixtureFunctionDefinition)
+            if issubclass(type(raw), classmethod):
+                _warn_at_fixture(
+                    inner,
+                    f"cannot discover fixture {inner.name!r} because it is wrapped "
+                    "by @classmethod; place @pytest.fixture above @classmethod",
+                )
+                return False
+            _warn_at_fixture(
+                inner,
+                f"fixture {inner.name!r} is wrapped by @staticmethod above "
+                "@pytest.fixture; place @pytest.fixture above @staticmethod",
+            )
+        return True
+
+    if _is_fixture_definition(obj_ub) or not callable(obj_ub):
+        return True
+    # Follow the ``__wrapped__`` chain left by functools.wraps() (bounded, in
+    # case an object fabricates attributes on access).
+    current = safe_getattr(obj_ub, "__wrapped__", None)
+    for _ in range(100):
+        if current is None or current is obj_ub:
+            break
+        if _is_fixture_definition(current):
+            assert isinstance(current, FixtureFunctionDefinition)
+            _warn_at_fixture(
+                current,
+                f"cannot discover fixture {current.name!r} "
+                "due to being wrapped in decorators",
+            )
+            return False
+        current = safe_getattr(current, "__wrapped__", None)
+    return True
 
 
 # Algorithm for sorting on a per-parametrized resource setup basis.
@@ -1411,12 +1494,20 @@ class FixtureFunctionDefinition:
 
     def __get__(self, instance, owner=None):
         """Behave like a method if the function it was applied to was a method."""
-        return FixtureFunctionDefinition(
-            function=self._fixture_function,
-            fixture_function_marker=self._fixture_function_marker,
-            instance=instance,
-            _ispytest=True,
-        )
+        # Copy rather than construct, so that subclasses (and any extra state
+        # they carry) are preserved when accessed through a class or instance.
+        bound = copy.copy(self)
+        if instance is not None:
+            bound._fixture_function = cast(
+                Callable[..., Any], self._fixture_function.__get__(instance)
+            )
+        elif owner is not None and isinstance(
+            self._fixture_function, (staticmethod, classmethod)
+        ):
+            # Accessed on the class: resolve to the plain function (staticmethod)
+            # or the class-bound method (classmethod).
+            bound._fixture_function = self._fixture_function.__get__(None, owner)
+        return bound
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         message = (
@@ -2105,7 +2196,9 @@ class FixtureManager:
             # The attribute can be an arbitrary descriptor, so the attribute
             # access below can raise. safe_getattr() ignores such exceptions.
             obj_ub = safe_getattr(holderobj_tp, name, None)
-            if type(obj_ub) is FixtureFunctionDefinition:
+            if not _check_fixture_wrapping(holderobj_tp, name, obj_ub):
+                continue
+            if _is_fixture_definition(obj_ub):
                 marker = obj_ub._fixture_function_marker
                 if marker.name:
                     fixture_name = marker.name
