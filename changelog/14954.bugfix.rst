@@ -1,0 +1,1 @@
+:confval:`max_warnings` now accepts a native TOML integer (e.g. ``max_warnings = 10``), as documented, in addition to a string.
