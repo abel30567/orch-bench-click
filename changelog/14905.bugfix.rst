@@ -1,0 +1,2 @@
+Fixed a stale assertion-rewritten ``.pyc`` being loaded when a test file was modified within the filesystem's mtime resolution without changing its size.
+The cached ``.pyc`` files written by the assertion rewriter are now invalidated by a hash of the source (:pep:`552`) instead of its mtime and size.
