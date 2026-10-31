@@ -1,0 +1,1 @@
+Subtests no longer report negative durations and wrong timestamps when the test mocks :func:`time.time` or :func:`time.perf_counter`, by measuring time through ``_pytest.timing`` like normal tests.
