@@ -337,6 +337,17 @@ class Expression:
         )
         return Expression(input, code)
 
+    def idents(self) -> frozenset[str]:
+        """Return the identifiers used in the expression.
+
+        Keyword argument names and values are not included: given
+        ``foo(bar=1) or baz``, returns ``foo`` and ``baz``.
+        """
+        # Keyword argument names are stored as constants, not in co_names.
+        return frozenset(
+            name.removeprefix(IDENT_PREFIX) for name in self._code.co_names
+        )
+
     def evaluate(self, matcher: ExpressionMatcher) -> bool:
         """Evaluate the match expression.
 
