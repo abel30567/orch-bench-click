@@ -3576,3 +3576,45 @@ class TestTerminalProgressPlugin:
         # Session finish - should remove progress.
         plugin.pytest_sessionfinish()
         assert "\x1b]9;4;0;\x1b\\" in mock_file.getvalue()
+
+
+class TestMaxWarningsConfig:
+    WARN_TEST = """
+        import warnings
+
+        def test_warning():
+            warnings.warn(UserWarning("example warning"))
+    """
+
+    @pytest.mark.parametrize(
+        "filename,content",
+        [
+            ("pytest.toml", "[pytest]\nmax_warnings = 0\n"),
+            ("pytest.toml", '[pytest]\nmax_warnings = "0"\n'),
+            ("pyproject.toml", "[tool.pytest]\nmax_warnings = 0\n"),
+            ("pytest.ini", "[pytest]\nmax_warnings = 0\n"),
+        ],
+    )
+    def test_threshold_exceeded(
+        self, pytester: Pytester, filename: str, content: str
+    ) -> None:
+        pytester.path.joinpath(filename).write_text(content, encoding="utf-8")
+        pytester.makepyfile(self.WARN_TEST)
+        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "default")
+        result.stdout.fnmatch_lines(
+            ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
+        )
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+    def test_threshold_not_exceeded(self, pytester: Pytester) -> None:
+        pytester.path.joinpath("pytest.toml").write_text(
+            "[pytest]\nmax_warnings = 1\n", encoding="utf-8"
+        )
+        pytester.makepyfile(self.WARN_TEST)
+        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "default")
+        assert result.ret == ExitCode.OK
+
+    def test_unset(self, pytester: Pytester) -> None:
+        pytester.makepyfile(self.WARN_TEST)
+        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "default")
+        assert result.ret == ExitCode.OK
