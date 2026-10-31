@@ -48,3 +48,16 @@ def test_warn_explicit_for_annotates_errors_with_location():
             pytest.raises,  # type: ignore[arg-type]
             warning_types.PytestWarning("test"),
         )
+
+
+def test_deprecated_constants_are_not_shared_instances() -> None:
+    """Warning constants in _pytest.deprecated must not be shared Warning
+    instances: under ``-W error`` the same object would be raised repeatedly,
+    accumulating tracebacks across raises."""
+    from _pytest import deprecated
+
+    for name, value in vars(deprecated).items():
+        assert not isinstance(value, Warning), name
+        if isinstance(value, warning_types.UnformattedWarning):
+            if "{" not in value.template:
+                assert value.format() is not value.format(), name
