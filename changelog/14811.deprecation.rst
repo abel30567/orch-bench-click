@@ -1,0 +1,3 @@
+Passing a value that is not a string to a ``string``-typed ini option in the ``[tool.pytest.ini_options]`` table is now deprecated, see :ref:`ini-string-non-string-value`.
+
+Such a value, which can only be a TOML array, used to be silently returned as a list by :meth:`config.getini() <pytest.Config.getini>`, unlike the ``int`` and ``float`` types and the native TOML tables, which reject it.

@@ -352,6 +352,100 @@ class TestFixtureNodeidDeprecations:
         result.assert_outcomes(passed=1)
 
 
+class TestIniStringNonStringValue:
+    MESSAGE = "^Passing a value that is not a string to a 'string'-typed ini option"
+
+    @pytest.fixture
+    def addini_conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def pytest_addoption(parser):
+                parser.addini("strval", "", type="string")
+                parser.addini("implicit", "")
+                parser.addini("aliased", "", type="string", aliases=["alias"])
+                parser.addini("str_or_int", "", type=str | int, default="")
+            """
+        )
+
+    @pytest.mark.parametrize("name", ["strval", "implicit", "alias", "str_or_int"])
+    @pytest.mark.parametrize("value", ['["a", "b"]', "[1, 2]"])
+    def test_list_warns_and_is_returned(
+        self, pytester: Pytester, addini_conftest: None, name: str, value: str
+    ) -> None:
+        pytester.makepyprojecttoml(f"[tool.pytest.ini_options]\n{name} = {value}\n")
+        config = pytester.parseconfig()
+        with pytest.warns(pytest.PytestRemovedIn10Warning, match=self.MESSAGE) as rec:
+            result = config.getini(name)
+        assert isinstance(result, list)
+        assert len(rec) == 1
+        assert rec[0].filename == __file__
+
+    def test_string_does_not_warn(
+        self, pytester: Pytester, addini_conftest: None, recwarn
+    ) -> None:
+        pytester.makepyprojecttoml('[tool.pytest.ini_options]\nstrval = "a b"\n')
+        assert pytester.parseconfig().getini("strval") == "a b"
+        assert len(recwarn) == 0
+
+    def test_toml_scalar_is_stringified_and_does_not_warn(
+        self, pytester: Pytester, addini_conftest: None, recwarn
+    ) -> None:
+        pytester.makepyprojecttoml("[tool.pytest.ini_options]\nstrval = 1\n")
+        assert pytester.parseconfig().getini("strval") == "1"
+        assert len(recwarn) == 0
+
+    def test_toml_mode_still_raises(
+        self, pytester: Pytester, addini_conftest: None
+    ) -> None:
+        pytester.makepyprojecttoml('[tool.pytest]\nstrval = ["a", "b"]\n')
+        config = pytester.parseconfig()
+        with pytest.raises(pytest.UsageError, match="expects a string"):
+            config.getini("strval")
+
+    def test_shown_in_warnings_summary(
+        self, pytester: Pytester, addini_conftest: None
+    ) -> None:
+        pytester.makepyprojecttoml('[tool.pytest.ini_options]\nstrval = ["a", "b"]\n')
+        pytester.makepyfile(
+            """
+            def test_it(pytestconfig):
+                assert pytestconfig.getini("strval") == ["a", "b"]
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn10Warning: Passing a value that is not a string*",
+                "*Option 'strval' got: *",
+            ]
+        )
+
+    def test_reported_at_configure_time(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def pytest_addoption(parser):
+                parser.addini("strval", "", type="string")
+
+            def pytest_configure(config):
+                config.getini("strval")
+            """
+        )
+        pytester.makepyprojecttoml('[tool.pytest.ini_options]\nstrval = ["a", "b"]\n')
+        pytester.makepyfile("def test_it(): pass")
+        result = pytester.runpytest_subprocess()
+        result.assert_outcomes(passed=1)
+        result.stderr.fnmatch_lines(
+            ["*PytestRemovedIn10Warning: Passing a value that is not a string*"]
+        )
+
+        result = pytester.runpytest_subprocess(
+            "-Werror::pytest.PytestRemovedIn10Warning"
+        )
+        assert result.ret != 0
+        result.stderr.fnmatch_lines(["*Passing a value that is not a string*"])
+
+
 def test_callspec2_renamed() -> None:
     """Importing/accessing CallSpec2 warns and returns CallSpec."""
     import _pytest.python as python_mod
