@@ -364,3 +364,92 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+class TestIniStringNonStringValue:
+    MESSAGE = "^Passing a value that is not a string to a 'string'-typed ini option"
+
+    @pytest.fixture
+    def addini_conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def pytest_addoption(parser):
+                parser.addini("opt", "", aliases=["opt_alias"])
+                parser.addini("union", "", type=int | str, default=0)
+            """
+        )
+
+    @pytest.mark.usefixtures("addini_conftest")
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("opt", ["a", "b"]),
+            ("opt_alias", ["a", "b"]),
+            ("opt", []),
+            ("union", ["a", "b"]),
+        ],
+    )
+    def test_list_in_ini_options_warns_and_is_returned(
+        self, pytester: Pytester, name: str, value: list[str]
+    ) -> None:
+        pytester.makepyprojecttoml(
+            f"""
+            [tool.pytest.ini_options]
+            {name} = {value!r}
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.warns(pytest.PytestRemovedIn10Warning, match=self.MESSAGE) as w:
+            assert config.getini(name) == value
+        assert len(w) == 1
+        assert w[0].filename == __file__
+
+    @pytest.mark.usefixtures("addini_conftest")
+    @pytest.mark.filterwarnings("error::pytest.PytestRemovedIn10Warning")
+    def test_scalar_in_ini_options_does_not_warn(self, pytester: Pytester) -> None:
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            opt = "value"
+            union = 10
+            """
+        )
+        config = pytester.parseconfig()
+        assert config.getini("opt") == "value"
+        assert config.getini("union") == 10
+
+    @pytest.mark.usefixtures("addini_conftest")
+    def test_warning_is_shown_in_summary(self, pytester: Pytester) -> None:
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            opt = ["a", "b"]
+            """
+        )
+        pytester.makepyfile(
+            """
+            def test(pytestconfig):
+                assert pytestconfig.getini("opt") == ["a", "b"]
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn10Warning: Passing a value that is not a string to a "
+                "'string'-typed ini option is deprecated.",
+                "*Option: opt, value: ?'a', 'b'?",
+            ]
+        )
+
+    @pytest.mark.usefixtures("addini_conftest")
+    def test_native_toml_still_raises(self, pytester: Pytester) -> None:
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            opt = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.raises(pytest.UsageError, match="expects a string, got list"):
+            config.getini("opt")
