@@ -1,15 +1,23 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import MutableSequence
 import dataclasses
+import importlib.util
+import os
+from pathlib import Path
 import sys
 import textwrap
+from types import SimpleNamespace
+import types
 from typing import Any
+from typing import cast
 from typing import Literal
 from typing import NamedTuple
+from typing import TYPE_CHECKING
 
 import attr
 
@@ -24,10 +32,17 @@ from _pytest.assertion._typing import NO_TRUNCATION_BUDGET
 from _pytest.assertion._typing import TruncationBudget
 from _pytest.assertion.compare_text import _compare_eq_text
 from _pytest.assertion.compare_text import _notin_text
+from _pytest.assertion.rewrite import _read_pyc
+from _pytest.assertion.rewrite import _rewrite_test
+from _pytest.assertion.rewrite import _write_pyc
 from _pytest.config import Config as _Config
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
 import pytest
+
+
+if TYPE_CHECKING:
+    from _pytest.assertion import AssertionState
 
 
 def mock_config(
@@ -2156,6 +2171,66 @@ class TestAssertReprCompareDispatcher:
         assert not any("\x1b[" in line for line in result)
 
 
+class TestRewrittenPycInvalidation:
+    def test_same_size_and_mtime_source_change(self, pytester: Pytester) -> None:
+        """A source change is detected even if size and mtime are unchanged."""
+        path = pytester.makepyfile("def test_a(): assert True")
+        stat = path.stat()
+        pytester.runpytest("-p", "no:cacheprovider").assert_outcomes(passed=1)
+        path.write_text("def test_b(): assert True", encoding="utf-8")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        result = pytester.runpytest("-p", "no:cacheprovider", "-v")
+        result.assert_outcomes(passed=1)
+        result.stdout.fnmatch_lines(["*::test_b PASSED*"])
+
+    def test_cached_pyc_reused_after_touch(self, tmp_path: Path) -> None:
+        """Only the source contents decide whether a cached pyc is valid."""
+        source = tmp_path / "source.py"
+        pyc = tmp_path / "source.pyc"
+        source_bytes = b"x = 1\n"
+        source.write_bytes(source_bytes)
+        state = cast("AssertionState", SimpleNamespace(trace=lambda _: None))
+        co = compile(source_bytes, str(source), "exec")
+
+        assert _write_pyc(state, co, importlib.util.source_hash(source_bytes), pyc)
+        os.utime(source, (0, 0))
+        assert _read_pyc(source, pyc) == co
+
+        source.write_bytes(b"x = 2\n")
+        assert _read_pyc(source, pyc) is None
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            pytest.param(lambda data: data[:15], id="too-short"),
+            pytest.param(lambda data: b"\x00" * 4 + data[4:], id="bad-magic"),
+            pytest.param(
+                lambda data: data[:4] + b"\x00" * 4 + data[8:], id="bad-flags"
+            ),
+            pytest.param(lambda data: data[:16] + b"\x00", id="bad-marshal"),
+        ],
+    )
+    def test_read_invalid_pyc(
+        self, tmp_path: Path, corrupt: Callable[[bytes], bytes]
+    ) -> None:
+        source = tmp_path / "source.py"
+        pyc = tmp_path / "source.pyc"
+        source_bytes = b"x = 1\n"
+        source.write_bytes(source_bytes)
+        state = cast("AssertionState", SimpleNamespace(trace=lambda _: None))
+        co = compile(source_bytes, str(source), "exec")
+        assert _write_pyc(state, co, importlib.util.source_hash(source_bytes), pyc)
+
+        pyc.write_bytes(corrupt(pyc.read_bytes()))
+        assert _read_pyc(source, pyc) is None
+
+    def test_rewrite_test_returns_source_hash(self, pytester: Pytester) -> None:
+        path = pytester.makepyfile("def test_a(): assert True")
+        source_hash, co = _rewrite_test(path, pytester.parseconfig())
+        assert source_hash == importlib.util.source_hash(path.read_bytes())
+        assert isinstance(co, types.CodeType)
+
+
 def test_python25_compile_issue257(pytester: Pytester) -> None:
     pytester.makepyfile(
         """
@@ -2475,7 +2550,10 @@ def test_exception_handling_no_traceback(pytester: Pytester) -> None:
     """
     )
     pytester.syspathinsert()
-    result = pytester.runpytest(p1, "--tb=long")
+    # In a subprocess because multiprocessing modules first imported in-process
+    # are dropped by pytester, and the resource tracker being garbage collected
+    # may then unlink the pool's semaphores before their finalizers run.
+    result = pytester.runpytest_subprocess(p1, "--tb=long")
     result.stdout.fnmatch_lines(
         [
             "====* FAILURES *====",

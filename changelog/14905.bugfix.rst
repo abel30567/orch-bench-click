@@ -1,0 +1,1 @@
+Fixed stale assertion rewriting ``.pyc`` caches being loaded when a test file was modified shortly after being imported: caches are now invalidated using a hash of the source file instead of its modification time and size.
