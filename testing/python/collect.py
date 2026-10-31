@@ -1798,6 +1798,34 @@ class TestFixtureDefinitionSubclass:
         result = pytester.runpytest("-Werror")
         result.assert_outcomes(passed=1)
 
+    def test_subclass_with_custom_new_in_class(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Sub(pytest.FixtureFunctionDefinition):
+                def __new__(cls, function, extra):
+                    return super().__new__(cls)
+
+                def __init__(self, function, extra):
+                    super().__init__(
+                        function=function,
+                        fixture_function_marker=pytest.fixture(),
+                    )
+
+            class TestIt:
+                @(lambda function: Sub(function, "extra"))
+                def cls_fix(self):
+                    return 1
+
+                def test_it(self, cls_fix):
+                    assert cls_fix == 1
+                    assert type(self.cls_fix) is Sub
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
 
 @pytest.mark.filterwarnings("default::pytest.PytestWarning")
 class TestWrappedFixture:
@@ -2063,3 +2091,161 @@ class TestWrappedFixture:
         )
         result = pytester.runpytest("-Werror")
         result.assert_outcomes(passed=1)
+
+    def test_legacy_fixtures_requested_in_class(self, pytester: Pytester) -> None:
+        """Regression test: the builtin fixtures defined with @pytest.fixture above
+        @staticmethod in a plugin registered as a class don't bind the test instance."""
+        pytester.makepyfile(
+            """
+            import pytest
+
+            def test_function(tmpdir, tmpdir_factory, testdir):
+                pass
+
+            class TestIt:
+                @pytest.fixture
+                def from_fixture(self, tmpdir):
+                    return tmpdir
+
+                def test_method(self, tmpdir, tmpdir_factory, testdir, from_fixture):
+                    assert tmpdir == from_fixture
+            """
+        )
+        result = pytester.runpytest("-p", "pytester")
+        result.assert_outcomes(passed=2)
+
+    @pytest.mark.parametrize("request_from", ["function", "method"])
+    def test_fixture_above_descriptors_in_plugin_class(
+        self, pytester: Pytester, request_from: str
+    ) -> None:
+        pytester.makeconftest(
+            """
+            import pytest
+
+            class Plugin:
+                value = "cls"
+
+                @pytest.fixture
+                @staticmethod
+                def static_fix(tmp_path):
+                    return tmp_path
+
+                @pytest.fixture
+                @classmethod
+                def cls_fix(cls, tmp_path):
+                    return cls.value
+
+            def pytest_configure(config):
+                config.pluginmanager.register(Plugin, "class-plugin")
+            """
+        )
+        args = "static_fix, cls_fix"
+        body = "assert cls_fix == 'cls'"
+        if request_from == "function":
+            pytester.makepyfile(f"def test_it({args}): {body}")
+        else:
+            pytester.makepyfile(
+                f"""
+                class TestIt:
+                    def test_it(self, {args}): {body}
+                """
+            )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_fixture_above_staticmethod_in_module_requested_in_class(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.fixture
+            @staticmethod
+            def fix(tmp_path):
+                return tmp_path
+
+            class TestIt:
+                def test_it(self, fix):
+                    pass
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    @pytest.fixture(params=["cmdline", "pytest_plugins", "conftest"])
+    def wrapped_outside_of_collectors(
+        self, request: pytest.FixtureRequest, pytester: Pytester
+    ) -> list[str]:
+        """Define a wrapped fixture which isn't parsed by a Module's collect(),
+        returning the arguments to run pytest with."""
+        source = (
+            self.DECORATOR
+            + """
+        @deco
+        @pytest.fixture
+        def wrapped():
+            return 1
+        """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        if request.param == "conftest":
+            pytester.makeconftest(source)
+            return []
+        pytester.makepyfile(myplug=source)
+        pytester.syspathinsert()
+        if request.param == "cmdline":
+            return ["-p", "myplug"]
+        pytester.makeconftest("pytest_plugins = ['myplug']")
+        return []
+
+    def test_outside_of_collectors_in_summary(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*warnings summary*",
+                "*.py:*cannot discover fixture 'wrapped' due to being wrapped in"
+                " decorators",
+            ]
+        )
+
+    def test_outside_of_collectors_as_error(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error
+            """
+        )
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        assert result.ret == pytest.ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            [
+                "ERROR: *.py:*: cannot discover fixture 'wrapped' due to being"
+                " wrapped in decorators"
+            ]
+        )
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+        result.stderr.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_plugin_registered_after_collection(self, pytester: Pytester) -> None:
+        """Warnings aren't deferred once there's no end of collection to wait for."""
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def wrapped(self):
+                return 1
+
+        def test_it(pytestconfig):
+            pytestconfig.pluginmanager.register(Plugin())
+        """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
