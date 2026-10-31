@@ -498,6 +498,37 @@ class TestParseIni:
         result = pytester.runpytest()
         result.stdout.no_fnmatch_line("*PytestConfigWarning*")
 
+    @pytest.mark.filterwarnings("default")
+    @pytest.mark.parametrize("action", ["ignore", "error"])
+    def test_filterwarnings_apply_to_conftest_pytest_configure(
+        self, pytester: Pytester, action: str
+    ) -> None:
+        """The filterwarnings ini option applies to warnings issued from
+        conftest pytest_configure hooks."""
+        pytester.makeini(
+            f"""
+            [pytest]
+            filterwarnings =
+                {action}:Some warning:UserWarning
+            """
+        )
+        pytester.makeconftest(
+            """
+            import warnings
+
+            def pytest_configure(config):
+                warnings.warn("Some warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_foo(): pass")
+        result = pytester.runpytest_subprocess()
+        if action == "ignore":
+            result.stderr.no_fnmatch_line("*Some warning*")
+            result.assert_outcomes(passed=1)
+        else:
+            result.stderr.fnmatch_lines("*UserWarning: Some warning*")
+            assert result.ret != pytest.ExitCode.OK
+
     @pytest.mark.parametrize(
         "option",
         [
