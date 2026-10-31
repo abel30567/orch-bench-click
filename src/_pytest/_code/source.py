@@ -12,6 +12,7 @@ import tokenize
 import types
 from typing import overload
 import warnings
+import weakref
 
 
 class Source:
@@ -166,7 +167,21 @@ def deindent(lines: Iterable[str]) -> list[str]:
     return textwrap.dedent("\n".join(lines)).splitlines()
 
 
-def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None]:
+_statement_linenos_cache: weakref.WeakKeyDictionary[ast.AST, list[int]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _statement_linenos(node: ast.AST) -> list[int]:
+    """Return the sorted (0-based) line numbers of all statements in node.
+
+    The result is memoized per node, since walking a large AST repeatedly
+    (e.g. once per entry of a deeply recursive traceback) is slow.
+    """
+    try:
+        return _statement_linenos_cache[node]
+    except KeyError:
+        pass
     # Flatten all statements and except handlers into one lineno-list.
     # AST's line numbers start indexing at 1.
     values: list[int] = []
@@ -183,6 +198,12 @@ def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None
                     # Treat the finally/orelse part as its own statement.
                     values.append(val[0].lineno - 1 - 1)
     values.sort()
+    _statement_linenos_cache[node] = values
+    return values
+
+
+def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None]:
+    values = _statement_linenos(node)
     insert_index = bisect_right(values, lineno)
     if insert_index == 0:
         return 0, None
