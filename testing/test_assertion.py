@@ -5,6 +5,9 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import MutableSequence
 import dataclasses
+import importlib.util
+import os
+from pathlib import Path
 import sys
 import textwrap
 from typing import Any
@@ -24,6 +27,9 @@ from _pytest.assertion._typing import NO_TRUNCATION_BUDGET
 from _pytest.assertion._typing import TruncationBudget
 from _pytest.assertion.compare_text import _compare_eq_text
 from _pytest.assertion.compare_text import _notin_text
+from _pytest.assertion.rewrite import _read_pyc
+from _pytest.assertion.rewrite import _rewrite_test
+from _pytest.assertion.rewrite import _write_pyc
 from _pytest.config import Config as _Config
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
@@ -3090,3 +3096,75 @@ def test_dict_extra_items_preserve_insertion_order(pytester: Pytester) -> None:
             "test_order.py:*: AssertionError",
         ]
     )
+
+
+def test_stale_pyc_with_same_size_and_mtime_is_not_loaded(pytester: Pytester) -> None:
+    """A source edit keeping size and mtime must not load the old pyc (#14905)."""
+    source = pytester.makepyfile("def test_dummy1(): print('ran dummy1')")
+    stat = source.stat()
+    result = pytester.runpytest_subprocess("-s")
+    result.stdout.fnmatch_lines(["*ran dummy1*", "*1 passed*"])
+
+    source.write_text("def test_dummy2(): print('ran dummy2')", encoding="utf-8")
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert source.stat().st_size == stat.st_size
+
+    result = pytester.runpytest_subprocess("-s")
+    result.stdout.fnmatch_lines(["*ran dummy2*", "*1 passed*"])
+
+
+class TestRewrittenPyc:
+    @staticmethod
+    def write_pyc(pytester: Pytester) -> tuple[Path, Path]:
+        config = pytester.parseconfig()
+        source = pytester.makepyfile("def test_dummy(): pass")
+        pyc = source.with_suffix(".pyc")
+        source_hash, co = _rewrite_test(source, config)
+        state = plugin.AssertionState(config, "rewrite")
+        assert _write_pyc(state, co, source_hash, pyc)
+        return source, pyc
+
+    def test_header(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        header = pyc.read_bytes()[:16]
+        assert header[:4] == importlib.util.MAGIC_NUMBER
+        assert int.from_bytes(header[4:8], "little") == 0b11
+        assert header[8:] == importlib.util.source_hash(source.read_bytes())
+        assert _read_pyc(source, pyc) is not None
+
+    def test_mtime_change_keeps_pyc_valid(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        os.utime(source, (0, 0))
+        assert _read_pyc(source, pyc) is not None
+
+    @pytest.mark.parametrize(
+        ("start", "stop", "reason"),
+        [
+            pytest.param(0, 4, "bad magic number", id="magic"),
+            pytest.param(4, 8, "unsupported flags", id="flags"),
+            pytest.param(8, 16, "out of date", id="hash"),
+        ],
+    )
+    def test_invalid_header(
+        self, pytester: Pytester, start: int, stop: int, reason: str
+    ) -> None:
+        source, pyc = self.write_pyc(pytester)
+        data = pyc.read_bytes()
+        pyc.write_bytes(data[:start] + b"\xff" * (stop - start) + data[stop:])
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert reason in messages[0]
+
+    def test_truncated_header(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        pyc.write_bytes(pyc.read_bytes()[:15])
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert "too short" in messages[0]
+
+    def test_missing_source(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        source.unlink()
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert "OSError" in messages[0]
