@@ -2446,3 +2446,56 @@ def test_assertion_failure_when_terminalreporter_is_disabled(
     )
     reprec = pytester.inline_run("-p", "no:terminalreporter")
     reprec.assertoutcome(passed=1)
+
+
+@pytest.mark.parametrize(
+    ("config_file", "content"),
+    [
+        pytest.param(
+            "pytest.ini",
+            "[pytest]\ntruncation_limit_lines = 0\ntruncation_limit_chars = 0\n",
+            id="ini",
+        ),
+        pytest.param(
+            "pyproject.toml",
+            "[tool.pytest]\ntruncation_limit_lines = 0\ntruncation_limit_chars = 0\n",
+            id="toml",
+        ),
+    ],
+)
+def test_truncation_limits_from_config(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch, config_file: str, content: str
+) -> None:
+    """Truncation limits are integers, including native integers in TOML (#14692)."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("BUILD_NUMBER", raising=False)
+    pytester.path.joinpath(config_file).write_text(content, encoding="utf-8")
+    pytester.makepyfile(
+        """
+        def test_failure():
+            assert list(range(100)) == list(range(1, 101))
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(failed=1)
+    result.stdout.no_fnmatch_line("*truncated*")
+    result.stdout.no_fnmatch_line("*TypeError*")
+
+
+def test_truncation_limits_toml_string_rejected(pytester: Pytester) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest]
+        truncation_limit_lines = "0"
+        """
+    )
+    pytester.makepyfile(
+        """
+        def test_failure():
+            assert list(range(100)) == list(range(1, 101))
+        """
+    )
+    result = pytester.runpytest()
+    result.stdout.fnmatch_lines(
+        ["*config option 'truncation_limit_lines' expects an int, got str: '0'*"]
+    )

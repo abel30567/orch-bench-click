@@ -3720,10 +3720,10 @@ All the command-line flags can also be obtained by running ``pytest --help``::
       enable_assertion_pass_hook (bool):
                             Enables the pytest_assertion_pass hook. Make sure to
                             delete any previously generated pyc cache files.
-      truncation_limit_lines (string):
+      truncation_limit_lines (int):
                             Set threshold of LINES after which truncation will
                             take effect
-      truncation_limit_chars (string):
+      truncation_limit_chars (int):
                             Set threshold of CHARS after which truncation will
                             take effect
       assertion_text_diff_style (string):
