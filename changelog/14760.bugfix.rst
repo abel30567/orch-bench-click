@@ -1,0 +1,1 @@
+Warning filters configured via the :confval:`filterwarnings` option are now applied to warnings issued from ``pytest_configure`` hooks in ``conftest.py`` files and plugins.
