@@ -8,8 +8,10 @@ import dataclasses
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import sys
 import textwrap
+import types
 from typing import Any
 from typing import Literal
 from typing import NamedTuple
@@ -27,6 +29,7 @@ from _pytest.assertion._typing import NO_TRUNCATION_BUDGET
 from _pytest.assertion._typing import TruncationBudget
 from _pytest.assertion.compare_text import _compare_eq_text
 from _pytest.assertion.compare_text import _notin_text
+from _pytest.assertion import rewrite
 from _pytest.assertion.rewrite import _read_pyc
 from _pytest.assertion.rewrite import _rewrite_test
 from _pytest.assertion.rewrite import _write_pyc
@@ -3113,6 +3116,53 @@ def test_stale_pyc_with_same_size_and_mtime_is_not_loaded(pytester: Pytester) ->
     result.stdout.fnmatch_lines(["*ran dummy2*", "*1 passed*"])
 
 
+@pytest.mark.parametrize("can_fix_filename", [True, False])
+def test_pyc_copied_with_source_reports_new_path(
+    pytester: Pytester, monkeypatch: MonkeyPatch, can_fix_filename: bool
+) -> None:
+    """A pyc reused at a new path must not keep its old co_filename (#14905)."""
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    old = pytester.mkdir("old")
+    source = old.joinpath("test_c.py")
+    source.write_text(
+        textwrap.dedent(
+            """\
+            import sys
+
+            MODULE_FILENAME = sys._getframe().f_code.co_filename
+
+            def test_filename():
+                assert MODULE_FILENAME == __file__
+                assert test_filename.__code__.co_filename == __file__
+
+            def test_fail():
+                assert 1 == 2  # ORIGINAL_LINE
+            """
+        ),
+        encoding="utf-8",
+    )
+    pytester.runpytest_inprocess(old).assert_outcomes(passed=1, failed=1)
+
+    new = pytester.path / "new"
+    shutil.copytree(old, new)
+    pyc = next(new.glob("__pycache__/*pytest*.pyc"))
+    pyc_data = pyc.read_bytes()
+    # The original now has other content on the line the old path would show.
+    source.write_text("\n" * 9 + "print('UNRELATED_LINE')\n", encoding="utf-8")
+
+    if not can_fix_filename:
+        monkeypatch.setattr(rewrite, "_fix_co_filename", lambda co, filename: False)
+    result = pytester.runpytest_inprocess(new, "--tb=short")
+
+    result.assert_outcomes(passed=1, failed=1)
+    result.stdout.fnmatch_lines(
+        ["new?test_c.py:10: in test_fail", "*assert 1 == 2  # ORIGINAL_LINE"]
+    )
+    result.stdout.no_fnmatch_line("*UNRELATED_LINE*")
+    # A fixed pyc is reused as is, otherwise it is replaced by a recompiled one.
+    assert (pyc.read_bytes() == pyc_data) is can_fix_filename
+
+
 class TestRewrittenPyc:
     @staticmethod
     def write_pyc(pytester: Pytester) -> tuple[Path, Path]:
@@ -3154,6 +3204,28 @@ class TestRewrittenPyc:
         messages: list[str] = []
         assert _read_pyc(source, pyc, messages.append) is None
         assert reason in messages[0]
+
+    def test_fix_co_filename(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        co = _read_pyc(source, pyc)
+        assert co is not None
+        assert rewrite._fix_co_filename(co, str(source))
+        assert co.co_filename == str(source)
+
+        assert rewrite._fix_co_filename(co, "moved.py")
+        nested = next(c for c in co.co_consts if isinstance(c, types.CodeType))
+        assert (co.co_filename, nested.co_filename) == ("moved.py", "moved.py")
+
+    def test_fix_co_filename_unavailable(
+        self, pytester: Pytester, monkeypatch: MonkeyPatch
+    ) -> None:
+        source, pyc = self.write_pyc(pytester)
+        co = _read_pyc(source, pyc)
+        assert co is not None
+        monkeypatch.setattr(rewrite, "_imp", types.SimpleNamespace())
+        assert rewrite._fix_co_filename(co, str(source))
+        assert not rewrite._fix_co_filename(co, "moved.py")
+        assert co.co_filename == str(source)
 
     def test_truncated_header(self, pytester: Pytester) -> None:
         source, pyc = self.write_pyc(pytester)

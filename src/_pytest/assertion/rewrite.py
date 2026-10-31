@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import _imp
 import ast
 from collections import defaultdict
 from collections.abc import Callable
@@ -175,6 +176,9 @@ class AssertionRewritingHook(importlib.abc.MetaPathFinder, importlib.abc.Loader)
         # Notice that even if we're in a read-only directory, I'm going
         # to check for a cached pyc. This may not be optimal...
         co = _read_pyc(fn, pyc, state.trace)
+        if co is not None and not _fix_co_filename(co, str(fn)):
+            state.trace(f"cannot relocate cached pyc for {fn}")
+            co = None
         if co is None:
             state.trace(f"rewriting {fn!r}")
             source_hash, co = _rewrite_test(fn, self.config)
@@ -388,6 +392,23 @@ def _read_pyc(
             trace(f"_read_pyc({source}): not a code object")
             return None
         return co
+
+
+def _fix_co_filename(co: types.CodeType, filename: str) -> bool:
+    """Make *co*, which may have been cached at another path, report *filename*.
+
+    The source hash doesn't cover the path a pyc was compiled for, so a pyc which
+    was copied or moved along with its source still passes validation.
+
+    Return False if *co* must be recompiled instead.
+    """
+    if co.co_filename == filename:
+        return True
+    fix_co_filename = getattr(_imp, "_fix_co_filename", None)
+    if fix_co_filename is None:
+        return False
+    fix_co_filename(co, filename)
+    return True
 
 
 def rewrite_asserts(
