@@ -129,7 +129,13 @@ def pytest_load_initial_conftests(
         return (yield)
 
 
-def pytest_configure(config: Config) -> None:
+def install_config_warning_filters(config: Config) -> None:
+    """Apply the configured warning filters until the config is cleaned up.
+
+    Called by ``Config._do_configure`` rather than from a ``pytest_configure``
+    hook, so that the filters also apply to every ``pytest_configure`` hook,
+    regardless of its ordering. The hook is historic so it can't be a wrapper.
+    """
     with ExitStack() as stack:
         stack.enter_context(
             catch_warnings_for_item(
@@ -144,9 +150,12 @@ def pytest_configure(config: Config) -> None:
                 record=False,
             )
         )
-        config.addinivalue_line(
-            "markers",
-            "filterwarnings(warning): add a warning filter to the given test. "
-            "see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ",
-        )
         config.add_cleanup(stack.pop_all().close)
+
+
+def pytest_configure(config: Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "filterwarnings(warning): add a warning filter to the given test. "
+        "see https://docs.pytest.org/en/stable/how-to/capture-warnings.html#pytest-mark-filterwarnings ",
+    )

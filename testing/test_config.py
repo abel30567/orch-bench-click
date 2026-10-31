@@ -537,6 +537,113 @@ class TestParseIni:
         result = pytester.runpytest("-pno:warnings")
         result.stdout.no_fnmatch_line("*PytestConfigWarning*")
 
+    @pytest.mark.parametrize("tryfirst", [False, True])
+    @pytest.mark.parametrize(
+        "ini_filters, args",
+        [
+            pytest.param("filterwarnings = ignore::UserWarning", (), id="ini"),
+            pytest.param("", ("-Wignore::UserWarning",), id="cmdline"),
+        ],
+    )
+    def test_warning_filters_apply_to_conftest_pytest_configure(
+        self,
+        pytester: Pytester,
+        ini_filters: str,
+        args: tuple[str, ...],
+        tryfirst: bool,
+    ) -> None:
+        """Warning filters are active during a conftest's pytest_configure."""
+        pytester.makeini(
+            f"""
+            [pytest]
+            {ini_filters}
+            """
+        )
+        pytester.makeconftest(
+            f"""
+            import warnings
+            import pytest
+            @pytest.hookimpl(tryfirst={tryfirst})
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess(*args)
+        result.assert_outcomes(passed=1)
+        result.stderr.no_fnmatch_line("*configure warning*")
+
+    @pytest.mark.parametrize("tryfirst", [False, True])
+    def test_error_filter_applies_to_conftest_pytest_configure(
+        self, pytester: Pytester, tryfirst: bool
+    ) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error::UserWarning
+            """
+        )
+        pytester.makeconftest(
+            f"""
+            import warnings
+            import pytest
+            @pytest.hookimpl(tryfirst={tryfirst})
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess()
+        assert result.ret == ExitCode.INTERNAL_ERROR
+        result.stdout.no_fnmatch_line("*1 passed*")
+        result.stderr.fnmatch_lines(["*UserWarning: configure warning"])
+
+    def test_warning_filters_apply_to_tryfirst_plugin_pytest_configure(
+        self, pytester: Pytester
+    ) -> None:
+        """Filters are active for a -p plugin's tryfirst pytest_configure."""
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = ignore::UserWarning
+            """
+        )
+        pytester.makepyfile(
+            configure_warning_plugin="""
+            import warnings
+            import pytest
+            @pytest.hookimpl(tryfirst=True)
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        pytester.syspathinsert()
+        result = pytester.runpytest_subprocess("-pconfigure_warning_plugin")
+        result.assert_outcomes(passed=1)
+        result.stderr.no_fnmatch_line("*configure warning*")
+
+    def test_warning_filters_not_installed_without_warnings_plugin(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = ignore::UserWarning
+            """
+        )
+        pytester.makeconftest(
+            """
+            import warnings
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess("-pno:warnings")
+        result.assert_outcomes(passed=1)
+        result.stderr.fnmatch_lines(["*UserWarning: configure warning"])
+
     @pytest.mark.parametrize(
         "ini_file_text, plugin_version, exception_text",
         [
