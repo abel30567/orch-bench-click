@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+import copy
 import dataclasses
 import functools
 import inspect
@@ -1384,6 +1385,14 @@ class FixtureFunctionMarker:
 
 # TODO: paramspec/return type annotation tracking and storing
 class FixtureFunctionDefinition:
+    """The object returned by the :func:`@pytest.fixture <pytest.fixture>`
+    decorator.
+
+    May be subclassed by plugins which generate fixtures. Instances of
+    subclasses are discovered like any other fixture, and keep their type when
+    accessed through a class or an instance.
+    """
+
     def __init__(
         self,
         *,
@@ -1392,7 +1401,8 @@ class FixtureFunctionDefinition:
         instance: object | None = None,
         _ispytest: bool = False,
     ) -> None:
-        check_ispytest(_ispytest)
+        if type(self) is FixtureFunctionDefinition:
+            check_ispytest(_ispytest)
         self.name = fixture_function_marker.name or function.__name__
         # In order to show the function that this fixture contains in messages.
         # Set the __name__ to be same as the function __name__ or the given fixture name.
@@ -1411,12 +1421,14 @@ class FixtureFunctionDefinition:
 
     def __get__(self, instance, owner=None):
         """Behave like a method if the function it was applied to was a method."""
-        return FixtureFunctionDefinition(
-            function=self._fixture_function,
-            fixture_function_marker=self._fixture_function_marker,
-            instance=instance,
-            _ispytest=True,
-        )
+        # Copy instead of constructing anew, since subclasses may have a
+        # different __init__ signature.
+        bound = copy.copy(self)
+        if instance is not None:
+            bound._fixture_function = cast(
+                Callable[..., Any], self._fixture_function.__get__(instance)
+            )
+        return bound
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         message = (
@@ -1429,6 +1441,29 @@ class FixtureFunctionDefinition:
 
     def _get_wrapped_function(self) -> Callable[..., Any]:
         return self._fixture_function
+
+
+def _is_fixture_definition(obj: object) -> bool:
+    # Not isinstance(), which a Mock(spec=...) passes through its __class__.
+    return issubclass(type(obj), FixtureFunctionDefinition)
+
+
+def _find_wrapped_fixture(obj: Any) -> FixtureFunctionDefinition | None:
+    """Follow the ``__wrapped__`` chain of an object to a fixture definition.
+
+    The chain is followed statically, since objects with a dynamic
+    ``__getattr__`` (e.g. mocks) answer to ``__wrapped__`` with anything.
+    """
+    seen = set()
+    while obj is not None and id(obj) not in seen:
+        if _is_fixture_definition(obj):
+            return cast(FixtureFunctionDefinition, obj)
+        seen.add(id(obj))
+        if issubclass(type(obj), classmethod | staticmethod):
+            obj = obj.__func__
+        else:
+            obj = inspect.getattr_static(obj, "__wrapped__", None)
+    return None
 
 
 @overload
@@ -1730,6 +1765,9 @@ class FixtureManager:
         # Pending conftest modules waiting to be parsed when their Directory is collected.
         # Maps directory path -> conftest plugin module.
         self._pending_conftests: Final[dict[Path, object]] = {}
+        # Warnings already issued by _warn_wrapped_fixture(). The same definition
+        # is seen multiple times if it's inherited or imported elsewhere.
+        self._wrapped_fixture_warnings: Final[set[tuple[str, int, str]]] = set()
         session.config.pluginmanager.register(self, "funcmanage")
         # Flush initial conftests from directories above rootpath immediately.
         # These will never get a Directory collector, so they need Session scope.
@@ -2104,8 +2142,12 @@ class FixtureManager:
         for name in dir(holderobj):
             # The attribute can be an arbitrary descriptor, so the attribute
             # access below can raise. safe_getattr() ignores such exceptions.
-            obj_ub = safe_getattr(holderobj_tp, name, None)
-            if type(obj_ub) is FixtureFunctionDefinition:
+            obj_ub = self._resolve_fixture_definition(
+                name,
+                safe_getattr(holderobj_tp, name, None),
+                inspect.getattr_static(holderobj_tp, name, None),
+            )
+            if obj_ub is not None:
                 marker = obj_ub._fixture_function_marker
                 if marker.name:
                     fixture_name = marker.name
@@ -2117,6 +2159,9 @@ class FixtureManager:
                     obj = getattr(holderobj, name)
                 # if the fixture is named in the decorator we cannot find it in the module
                 except AttributeError:
+                    obj = obj_ub
+                # For example a @staticmethod accessed on a module.
+                if not _is_fixture_definition(obj):
                     obj = obj_ub
 
                 func = obj._get_wrapped_function()
@@ -2131,6 +2176,66 @@ class FixtureManager:
                     node=effective_node,
                     nodeid=effective_nodeid,
                 )
+
+    def _resolve_fixture_definition(
+        self, name: str, obj: object, obj_static: Any
+    ) -> FixtureFunctionDefinition | None:
+        """Return the fixture definition to discover for an attribute, if any,
+        warning about a fixture which is hidden behind another decorator.
+
+        :param name: The name of the attribute.
+        :param obj: The attribute's value.
+        :param obj_static: The attribute as stored, without invoking descriptors.
+            The behavior of @classmethod on top of a descriptor such as a fixture
+            definition depends on the Python version, so ``obj`` can't be relied
+            upon to tell how the fixture was defined.
+        """
+        if issubclass(type(obj_static), classmethod | staticmethod) and (
+            _is_fixture_definition(obj_static.__func__)
+        ):
+            definition: FixtureFunctionDefinition = obj_static.__func__
+            fixture_name = definition._fixture_function_marker.name or name
+            if issubclass(type(obj_static), staticmethod):
+                self._warn_wrapped_fixture(
+                    f"fixture {fixture_name!r} is wrapped by @staticmethod above "
+                    "@pytest.fixture; place @pytest.fixture above @staticmethod",
+                    definition,
+                )
+                return definition
+            self._warn_wrapped_fixture(
+                f"cannot discover fixture {fixture_name!r} because it is wrapped by "
+                "@classmethod; place @pytest.fixture above @classmethod",
+                definition,
+            )
+            return None
+
+        if _is_fixture_definition(obj):
+            return cast(FixtureFunctionDefinition, obj)
+
+        wrapped = _find_wrapped_fixture(obj_static)
+        if wrapped is not None:
+            fixture_name = wrapped._fixture_function_marker.name or name
+            self._warn_wrapped_fixture(
+                f"cannot discover fixture {fixture_name!r} due to being wrapped in "
+                "decorators",
+                wrapped,
+            )
+        return None
+
+    def _warn_wrapped_fixture(
+        self, message: str, definition: FixtureFunctionDefinition
+    ) -> None:
+        """Issue a warning located at the definition of a fixture."""
+        path, lineno = getfslineno(definition)
+        key = (str(path), lineno, message)
+        if key not in self._wrapped_fixture_warnings:
+            warnings.warn_explicit(
+                message=PytestWarning(message),
+                category=None,
+                filename=str(path),
+                lineno=lineno + 1,
+            )
+            self._wrapped_fixture_warnings.add(key)
 
     def getfixturedefs(
         self, argname: str, node: nodes.Node
