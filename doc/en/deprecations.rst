@@ -20,7 +20,7 @@ Below is a complete list of all pytest features which are considered deprecated.
 Non-string values for ``string``-typed ini options
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 9.1
+.. deprecated:: 9.2
 
 In the ``[tool.pytest.ini_options]`` table of ``pyproject.toml``, TOML arrays are kept as lists.
 Previously, a list given to an ini option registered with ``type="string"`` was silently returned

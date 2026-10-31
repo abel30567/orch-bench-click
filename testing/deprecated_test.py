@@ -381,13 +381,62 @@ def test_ini_string_option_non_string_value_deprecated(pytester: Pytester) -> No
         strip = ["a", "b"]
         """
     )
-    config = pytester.parseconfig()
-    with pytest.warns(
-        pytest.PytestRemovedIn10Warning,
-        match=r"^Passing a value that is not a string to a 'string'-typed ini option",
-    ):
-        value = config.getini("strip")
-    assert value == ["a", "b"]
+    pytester.makepyfile(
+        """
+        def test_a(pytestconfig):
+            assert pytestconfig.getini("strip") == ["a", "b"]
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1, warnings=1)
+    # The warning points at the caller of getini() and names the config file.
+    result.stdout.fnmatch_lines(
+        [
+            "test_ini_string_option_non_string_value_deprecated.py:2",
+            "*PytestRemovedIn10Warning: Passing a value that is not a string"
+            " to a 'string'-typed ini option*",
+            "*pyproject.toml: option 'strip' got: [[]'a', 'b'[]]",
+        ]
+    )
+
+
+def test_ini_string_option_non_string_value_deprecated_at_configure(
+    pytester: Pytester,
+) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        junit_suite_name = ["x"]
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest("--junitxml=out.xml")
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*= warnings summary =*",
+            "*junitxml.py:*",
+            "*PytestRemovedIn10Warning: Passing a value that is not a string*",
+            "*pyproject.toml: option 'junit_suite_name' got: [[]'x'[]]",
+        ]
+    )
+
+
+def test_ini_string_option_non_string_value_error_filter(pytester: Pytester) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        junit_suite_name = ["x"]
+        filterwarnings = ["error"]
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest("--junitxml=out.xml")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Passing a value that is not a string to a 'string'-typed ini option*"]
+    )
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
 
 
 def test_ini_string_option_string_value_no_warning(pytester: Pytester) -> None:

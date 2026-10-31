@@ -1952,12 +1952,17 @@ class Config:
             return _strtobool(str(value).strip())
         elif type == "string":
             if not isinstance(value, str):
-                warnings.warn(
-                    _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
-                        name=name, value=value
-                    ),
-                    stacklevel=2,
+                warning = _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
+                    inipath=self.inipath, name=name, value=value
                 )
+                try:
+                    # Frames: issue_config_time_warning <- _getini_ini <-
+                    # _getini_value <- _getini <- getini <- caller of getini().
+                    self.issue_config_time_warning(warning, stacklevel=6)
+                except builtins.type(warning) as e:
+                    # Escalated by an "error" filter: report it as a usage
+                    # error rather than an internal error traceback.
+                    raise UsageError(str(e)) from e
             return value
         elif type == "int":
             if not isinstance(value, str):
