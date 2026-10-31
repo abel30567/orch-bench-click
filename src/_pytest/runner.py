@@ -296,12 +296,6 @@ class CallInfo(Generic[TResult]):
     _result: TResult | None
     #: The captured exception of the call, if it raised.
     excinfo: ExceptionInfo[BaseException] | None
-    #: The system time when the call started, in seconds since the epoch.
-    start: float
-    #: The system time when the call ended, in seconds since the epoch.
-    stop: float
-    #: The call duration, in seconds.
-    duration: float
     #: The context of invocation: "collect", "setup", "call" or "teardown".
     when: Literal["collect", "setup", "call", "teardown"]
 
@@ -309,9 +303,7 @@ class CallInfo(Generic[TResult]):
         self,
         result: TResult | None,
         excinfo: ExceptionInfo[BaseException] | None,
-        start: float,
-        stop: float,
-        duration: float,
+        duration: timing.Duration,
         when: Literal["collect", "setup", "call", "teardown"],
         *,
         _ispytest: bool = False,
@@ -319,10 +311,45 @@ class CallInfo(Generic[TResult]):
         check_ispytest(_ispytest)
         self._result = result
         self.excinfo = excinfo
-        self.start = start
-        self.stop = stop
-        self.duration = duration
+        self._timing = duration
+        # Explicitly assigned values, overriding the measured ones.
+        self._start: float | None = None
+        self._stop: float | None = None
+        self._duration: float | None = None
         self.when = when
+
+    @property
+    def start(self) -> float:
+        """The system time when the call started, in seconds since the epoch."""
+        if self._start is not None:
+            return self._start
+        return self._timing.start.time
+
+    @start.setter
+    def start(self, value: float) -> None:
+        self._start = value
+
+    @property
+    def stop(self) -> float:
+        """The system time when the call ended, in seconds since the epoch."""
+        if self._stop is not None:
+            return self._stop
+        return self._timing.stop.time
+
+    @stop.setter
+    def stop(self, value: float) -> None:
+        self._stop = value
+
+    @property
+    def duration(self) -> float:
+        """The call duration, in seconds."""
+        if self._duration is not None:
+            return self._duration
+        return self._timing.seconds
+
+    @duration.setter
+    def duration(self, value: float) -> None:
+        self._duration = value
 
     @property
     def result(self) -> TResult:
@@ -364,11 +391,8 @@ class CallInfo(Generic[TResult]):
             if reraise is not None and isinstance(excinfo.value, reraise):
                 raise
             result = None
-        duration = instant.elapsed()
         return cls(
-            start=duration.start.time,
-            stop=duration.stop.time,
-            duration=duration.seconds,
+            duration=instant.elapsed(),
             when=when,
             result=result,
             excinfo=excinfo,
