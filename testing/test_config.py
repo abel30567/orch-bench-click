@@ -538,6 +538,56 @@ class TestParseIni:
         result.stdout.no_fnmatch_line("*PytestConfigWarning*")
 
     @pytest.mark.parametrize(
+        "ini_filters, args",
+        [
+            pytest.param("filterwarnings = ignore::UserWarning", (), id="ini"),
+            pytest.param("", ("-Wignore::UserWarning",), id="cmdline"),
+        ],
+    )
+    def test_warning_filters_apply_to_conftest_pytest_configure(
+        self, pytester: Pytester, ini_filters: str, args: tuple[str, ...]
+    ) -> None:
+        """Warning filters are active during a conftest's pytest_configure."""
+        pytester.makeini(
+            f"""
+            [pytest]
+            {ini_filters}
+            """
+        )
+        pytester.makeconftest(
+            """
+            import warnings
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess(*args)
+        result.assert_outcomes(passed=1)
+        result.stderr.no_fnmatch_line("*configure warning*")
+
+    def test_error_filter_applies_to_conftest_pytest_configure(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error::UserWarning
+            """
+        )
+        pytester.makeconftest(
+            """
+            import warnings
+            def pytest_configure(config):
+                warnings.warn("configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess()
+        result.stdout.no_fnmatch_line("*1 passed*")
+        result.stderr.fnmatch_lines(["*UserWarning: configure warning"])
+
+    @pytest.mark.parametrize(
         "ini_file_text, plugin_version, exception_text",
         [
             pytest.param(

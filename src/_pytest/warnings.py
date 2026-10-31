@@ -129,6 +129,9 @@ def pytest_load_initial_conftests(
         return (yield)
 
 
+# tryfirst so that the filters also apply to the pytest_configure hooks of other
+# plugins and conftests. pytest_configure is historic so it can't be a wrapper.
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: Config) -> None:
     with ExitStack() as stack:
         stack.enter_context(
