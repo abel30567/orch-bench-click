@@ -3603,7 +3603,9 @@ class TestMaxWarningsConfig:
         pytester.path.joinpath(filename).write_text(
             f"{section}\nmax_warnings = {value}\n", encoding="utf-8"
         )
-        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "always::UserWarning")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
         result.stdout.fnmatch_lines(
             ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
         )
@@ -3612,16 +3614,22 @@ class TestMaxWarningsConfig:
     @pytest.mark.parametrize("value", ["1", '"1"'])
     def test_toml_not_exceeded(self, pytester: Pytester, value: str) -> None:
         pytester.makefile(".toml", pytest=f"[pytest]\nmax_warnings = {value}\n")
-        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "always::UserWarning")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
         assert result.ret == ExitCode.OK
 
     def test_ini_zero(self, pytester: Pytester) -> None:
         pytester.makeini("[pytest]\nmax_warnings = 0\n")
-        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "always::UserWarning")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
         assert result.ret == ExitCode.MAX_WARNINGS_ERROR
 
     def test_unset(self, pytester: Pytester) -> None:
-        result = pytester.runpytest("-qq", "--disable-warnings", "-W", "always::UserWarning")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
         assert result.ret == ExitCode.OK
 
     def test_getini_native_int(self, pytester: Pytester) -> None:
