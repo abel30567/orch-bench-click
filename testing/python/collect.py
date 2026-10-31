@@ -1826,6 +1826,44 @@ class TestFixtureDefinitionSubclass:
         result = pytester.runpytest("-Werror")
         result.assert_outcomes(passed=1)
 
+    def test_subclass_with_slots_in_class(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Base(pytest.FixtureFunctionDefinition):
+                __slots__ = ("inherited", "__private", "unset")
+
+            class Sub(Base):
+                __slots__ = "single"
+
+                def __init__(self, function):
+                    super().__init__(
+                        function=function,
+                        fixture_function_marker=pytest.fixture(),
+                    )
+                    self.inherited = 1
+                    self._Base__private = 2
+                    self.single = 3
+
+            class TestIt:
+                @Sub
+                def cls_fix(self):
+                    return 4
+
+                def test_it(self, cls_fix):
+                    assert cls_fix == 4
+                    for fix in (self.cls_fix, TestIt.cls_fix):
+                        assert type(fix) is Sub
+                        assert fix.inherited == 1
+                        assert fix._Base__private == 2
+                        assert fix.single == 3
+                        assert not hasattr(fix, "unset")
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
 
 @pytest.mark.filterwarnings("default::pytest.PytestWarning")
 class TestWrappedFixture:

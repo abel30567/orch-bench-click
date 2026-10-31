@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+import copyreg
 import dataclasses
 import functools
 import inspect
@@ -1425,6 +1426,11 @@ class FixtureFunctionDefinition:
         # different __init__ or __new__ signature.
         bound = object.__new__(type(self))
         bound.__dict__.update(self.__dict__)
+        for slot in copyreg._slotnames(type(self)):  # type: ignore[attr-defined]
+            # An unset slot stays unset in the copy.
+            value = getattr(self, slot, NOTSET)
+            if value is not NOTSET:
+                object.__setattr__(bound, slot, value)
         if instance is not None:
             bound._fixture_function = cast(
                 Callable[..., Any], self._fixture_function.__get__(instance)
