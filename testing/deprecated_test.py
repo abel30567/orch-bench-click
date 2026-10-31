@@ -364,3 +364,54 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+class TestIniStringNonStringValue:
+    def _register(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def pytest_addoption(parser):
+                parser.addini("strip", "", type="string")
+            """
+        )
+
+    def test_list_value_in_ini_options_warns(self, pytester: Pytester) -> None:
+        self._register(pytester)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            strip = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.warns(
+            pytest.PytestRemovedIn10Warning,
+            match=r"^Passing a value that is not a string to a 'string'-typed ini option",
+        ):
+            assert config.getini("strip") == ["a", "b"]
+
+    @pytest.mark.filterwarnings("error")
+    def test_string_value_in_ini_options_does_not_warn(
+        self, pytester: Pytester
+    ) -> None:
+        self._register(pytester)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            strip = "a b"
+            """
+        )
+        config = pytester.parseconfig()
+        assert config.getini("strip") == "a b"
+
+    def test_list_value_in_toml_mode_still_errors(self, pytester: Pytester) -> None:
+        self._register(pytester)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            strip = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.raises(pytest.UsageError, match="expects a string, got list"):
+            config.getini("strip")

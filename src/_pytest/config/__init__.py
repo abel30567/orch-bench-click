@@ -1951,6 +1951,15 @@ class Config:
         elif type == "bool":
             return _strtobool(str(value).strip())
         elif type == "string":
+            if not isinstance(value, str):
+                # A TOML array in the `tool.pytest.ini_options` table is kept as
+                # a list; this should be an error, like in TOML mode.
+                warnings.warn(
+                    _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
+                        name=name, value=value
+                    ),
+                    stacklevel=5,
+                )
             return value
         elif type == "int":
             if not isinstance(value, str):
