@@ -3576,3 +3576,73 @@ class TestTerminalProgressPlugin:
         # Session finish - should remove progress.
         plugin.pytest_sessionfinish()
         assert "\x1b]9;4;0;\x1b\\" in mock_file.getvalue()
+
+
+class TestMaxWarnings:
+    # The in-process run inherits pytest's own "error" warning filter.
+    show_warning = "-Wdefault::UserWarning"
+
+    @pytest.fixture(autouse=True)
+    def warning_test(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import warnings
+
+            def test_warning():
+                warnings.warn(UserWarning("example warning"))
+            """
+        )
+
+    @pytest.mark.parametrize(
+        ("filename", "section", "value", "expected"),
+        [
+            ("pytest.toml", "[pytest]", "0", ExitCode.MAX_WARNINGS_ERROR),
+            ("pytest.toml", "[pytest]", "1", ExitCode.OK),
+            ("pytest.toml", "[pytest]", '"0"', ExitCode.MAX_WARNINGS_ERROR),
+            ("pytest.toml", "[pytest]", '"1"', ExitCode.OK),
+            ("pytest.toml", "[pytest]", '""', ExitCode.OK),
+            ("pyproject.toml", "[tool.pytest]", "0", ExitCode.MAX_WARNINGS_ERROR),
+            ("pyproject.toml", "[tool.pytest]", "1", ExitCode.OK),
+            ("pytest.ini", "[pytest]", "0", ExitCode.MAX_WARNINGS_ERROR),
+            ("pytest.ini", "[pytest]", "1", ExitCode.OK),
+            ("pytest.ini", "[pytest]", "", ExitCode.OK),
+        ],
+    )
+    def test_config_value(
+        self,
+        pytester: Pytester,
+        filename: str,
+        section: str,
+        value: str,
+        expected: ExitCode,
+    ) -> None:
+        pytester.path.joinpath(filename).write_text(
+            f"{section}\nmax_warnings = {value}\n", encoding="utf-8"
+        )
+        result = pytester.runpytest(self.show_warning)
+        assert result.ret == expected
+        if expected == ExitCode.MAX_WARNINGS_ERROR:
+            result.stdout.fnmatch_lines(
+                ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
+            )
+
+    def test_override_ini_zero(self, pytester: Pytester) -> None:
+        result = pytester.runpytest(self.show_warning, "-o", "max_warnings=0")
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+    def test_unset(self, pytester: Pytester) -> None:
+        result = pytester.runpytest(self.show_warning)
+        assert result.ret == ExitCode.OK
+
+    def test_command_line_takes_precedence(self, pytester: Pytester) -> None:
+        pytester.makefile(".toml", pytest="[pytest]\nmax_warnings = 0\n")
+        result = pytester.runpytest(self.show_warning, "--max-warnings=1")
+        assert result.ret == ExitCode.OK
+
+    def test_toml_invalid_type(self, pytester: Pytester) -> None:
+        pytester.makefile(".toml", pytest="[pytest]\nmax_warnings = true\n")
+        result = pytester.runpytest(self.show_warning)
+        assert result.ret == ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            ["ERROR: *config option 'max_warnings' expects one of int | string, *"]
+        )
