@@ -129,6 +129,7 @@ def pytest_load_initial_conftests(
         return (yield)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: Config) -> None:
     with ExitStack() as stack:
         stack.enter_context(
