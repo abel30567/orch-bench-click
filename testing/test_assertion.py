@@ -5,8 +5,13 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import MutableSequence
 import dataclasses
+import importlib.util
+import os
+from pathlib import Path
+import shutil
 import sys
 import textwrap
+import types
 from typing import Any
 from typing import Literal
 from typing import NamedTuple
@@ -24,6 +29,10 @@ from _pytest.assertion._typing import NO_TRUNCATION_BUDGET
 from _pytest.assertion._typing import TruncationBudget
 from _pytest.assertion.compare_text import _compare_eq_text
 from _pytest.assertion.compare_text import _notin_text
+from _pytest.assertion import rewrite
+from _pytest.assertion.rewrite import _read_pyc
+from _pytest.assertion.rewrite import _rewrite_test
+from _pytest.assertion.rewrite import _write_pyc
 from _pytest.config import Config as _Config
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
@@ -3090,3 +3099,144 @@ def test_dict_extra_items_preserve_insertion_order(pytester: Pytester) -> None:
             "test_order.py:*: AssertionError",
         ]
     )
+
+
+def test_stale_pyc_with_same_size_and_mtime_is_not_loaded(pytester: Pytester) -> None:
+    """A source edit keeping size and mtime must not load the old pyc (#14905)."""
+    source = pytester.makepyfile("def test_dummy1(): print('ran dummy1')")
+    stat = source.stat()
+    result = pytester.runpytest_subprocess("-s")
+    result.stdout.fnmatch_lines(["*ran dummy1*", "*1 passed*"])
+
+    source.write_text("def test_dummy2(): print('ran dummy2')", encoding="utf-8")
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert source.stat().st_size == stat.st_size
+
+    result = pytester.runpytest_subprocess("-s")
+    result.stdout.fnmatch_lines(["*ran dummy2*", "*1 passed*"])
+
+
+@pytest.mark.parametrize("can_fix_filename", [True, False])
+def test_pyc_copied_with_source_reports_new_path(
+    pytester: Pytester, monkeypatch: MonkeyPatch, can_fix_filename: bool
+) -> None:
+    """A pyc reused at a new path must not keep its old co_filename (#14905)."""
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    old = pytester.mkdir("old")
+    source = old.joinpath("test_c.py")
+    source.write_text(
+        textwrap.dedent(
+            """\
+            import sys
+
+            MODULE_FILENAME = sys._getframe().f_code.co_filename
+
+            def test_filename():
+                assert MODULE_FILENAME == __file__
+                assert test_filename.__code__.co_filename == __file__
+
+            def test_fail():
+                assert 1 == 2  # ORIGINAL_LINE
+            """
+        ),
+        encoding="utf-8",
+    )
+    pytester.runpytest_inprocess(old).assert_outcomes(passed=1, failed=1)
+
+    new = pytester.path / "new"
+    shutil.copytree(old, new)
+    pyc = next(new.glob("__pycache__/*pytest*.pyc"))
+    pyc_data = pyc.read_bytes()
+    # The original now has other content on the line the old path would show.
+    source.write_text("\n" * 9 + "print('UNRELATED_LINE')\n", encoding="utf-8")
+
+    if not can_fix_filename:
+        monkeypatch.setattr(rewrite, "_fix_co_filename", lambda co, filename: False)
+    result = pytester.runpytest_inprocess(new, "--tb=short")
+
+    result.assert_outcomes(passed=1, failed=1)
+    result.stdout.fnmatch_lines(
+        ["new?test_c.py:10: in test_fail", "*assert 1 == 2  # ORIGINAL_LINE"]
+    )
+    result.stdout.no_fnmatch_line("*UNRELATED_LINE*")
+    # A fixed pyc is reused as is, otherwise it is replaced by a recompiled one.
+    assert (pyc.read_bytes() == pyc_data) is can_fix_filename
+
+
+class TestRewrittenPyc:
+    @staticmethod
+    def write_pyc(pytester: Pytester) -> tuple[Path, Path]:
+        config = pytester.parseconfig()
+        source = pytester.makepyfile("def test_dummy(): pass")
+        pyc = source.with_suffix(".pyc")
+        source_hash, co = _rewrite_test(source, config)
+        state = plugin.AssertionState(config, "rewrite")
+        assert _write_pyc(state, co, source_hash, pyc)
+        return source, pyc
+
+    def test_header(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        header = pyc.read_bytes()[:16]
+        assert header[:4] == importlib.util.MAGIC_NUMBER
+        assert int.from_bytes(header[4:8], "little") == 0b11
+        assert header[8:] == importlib.util.source_hash(source.read_bytes())
+        assert _read_pyc(source, pyc) is not None
+
+    def test_mtime_change_keeps_pyc_valid(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        os.utime(source, (0, 0))
+        assert _read_pyc(source, pyc) is not None
+
+    @pytest.mark.parametrize(
+        ("start", "stop", "reason"),
+        [
+            pytest.param(0, 4, "bad magic number", id="magic"),
+            pytest.param(4, 8, "unsupported flags", id="flags"),
+            pytest.param(8, 16, "out of date", id="hash"),
+        ],
+    )
+    def test_invalid_header(
+        self, pytester: Pytester, start: int, stop: int, reason: str
+    ) -> None:
+        source, pyc = self.write_pyc(pytester)
+        data = pyc.read_bytes()
+        pyc.write_bytes(data[:start] + b"\xff" * (stop - start) + data[stop:])
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert reason in messages[0]
+
+    def test_fix_co_filename(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        co = _read_pyc(source, pyc)
+        assert co is not None
+        assert rewrite._fix_co_filename(co, str(source))
+        assert co.co_filename == str(source)
+
+        assert rewrite._fix_co_filename(co, "moved.py")
+        nested = next(c for c in co.co_consts if isinstance(c, types.CodeType))
+        assert (co.co_filename, nested.co_filename) == ("moved.py", "moved.py")
+
+    def test_fix_co_filename_unavailable(
+        self, pytester: Pytester, monkeypatch: MonkeyPatch
+    ) -> None:
+        source, pyc = self.write_pyc(pytester)
+        co = _read_pyc(source, pyc)
+        assert co is not None
+        monkeypatch.setattr(rewrite, "_imp", types.SimpleNamespace())
+        assert rewrite._fix_co_filename(co, str(source))
+        assert not rewrite._fix_co_filename(co, "moved.py")
+        assert co.co_filename == str(source)
+
+    def test_truncated_header(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        pyc.write_bytes(pyc.read_bytes()[:15])
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert "too short" in messages[0]
+
+    def test_missing_source(self, pytester: Pytester) -> None:
+        source, pyc = self.write_pyc(pytester)
+        source.unlink()
+        messages: list[str] = []
+        assert _read_pyc(source, pyc, messages.append) is None
+        assert "OSError" in messages[0]
