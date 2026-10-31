@@ -1,0 +1,3 @@
+Setting a ``string``-typed configuration option to a non-string value, such as a TOML array, in the ``[tool.pytest.ini_options]`` table is now deprecated and emits :class:`~pytest.PytestRemovedIn10Warning`. It will become an error in pytest 10, matching the native ``[tool.pytest]`` table.
+
+See :ref:`ini-string-non-string-value` for details.
