@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from _pytest import timing
 from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionRepr
 from _pytest.approx import approx
@@ -10,7 +11,105 @@ from _pytest.config import Config
 from _pytest.pytester import Pytester
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
+from _pytest.runner import CallInfo
+from _pytest.subtests import SubtestReport
 import pytest
+
+
+class TestCallInfoTiming:
+    def test_reads_from_duration(self) -> None:
+        duration = timing.Duration(
+            start=timing.Instant(time=100.0, perf_count=5.0),
+            stop=timing.Instant(time=102.0, perf_count=7.5),
+        )
+        call = CallInfo[None](None, None, duration, "call", _ispytest=True)
+        assert (call.start, call.stop, call.duration) == (100.0, 102.0, 2.5)
+
+    def test_unmeasured(self) -> None:
+        call = CallInfo[None](None, None, timing.UNMEASURED, "call", _ispytest=True)
+        assert (call.start, call.stop, call.duration) == (0, 0, 0)
+
+    def test_attributes_are_assignable_independently(self) -> None:
+        duration = timing.Duration(
+            start=timing.Instant(time=100.0, perf_count=12345.678),
+            stop=timing.Instant(time=102.0, perf_count=12348.178),
+        )
+        call = CallInfo[None](None, None, duration, "call", _ispytest=True)
+
+        call.start = 50.0
+        assert (call.start, call.stop, call.duration) == (50.0, 102.0, 2.5)
+        call.stop = 60.0
+        assert (call.start, call.stop, call.duration) == (50.0, 60.0, 2.5)
+        call.duration = 0.1
+        assert (call.start, call.stop, call.duration) == (50.0, 60.0, 0.1)
+
+    def test_assigning_does_not_affect_unmeasured(self) -> None:
+        call = CallInfo[None](None, None, timing.UNMEASURED, "call", _ispytest=True)
+        call.start = 1.0
+        call.stop = 2.0
+        call.duration = 3.0
+        assert timing.UNMEASURED.start.time == 0
+        assert timing.UNMEASURED.stop.time == 0
+        assert timing.UNMEASURED.seconds == 0
+
+    def test_subtest_ignores_mocked_time(self, pytester: Pytester) -> None:
+        reprec = pytester.inline_runsource(
+            """
+            import time
+
+            def test(subtests, monkeypatch):
+                real_sleep = time.sleep
+                with subtests.test(msg="frozen clock"):
+                    monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                    monkeypatch.setattr("time.time", lambda: 0.0)
+                    real_sleep(0.01)
+            """
+        )
+        [report] = [
+            x
+            for x in reprec.getreports("pytest_runtest_logreport")
+            if isinstance(x, SubtestReport)
+        ]
+        assert report.duration >= 0.01
+        assert report.stop >= report.start > 0
+
+    def test_subtest_uses_pytest_timing(
+        self, pytester: Pytester, mock_timing: timing.MockTiming
+    ) -> None:
+        reprec = pytester.inline_runsource(
+            """
+            from _pytest import timing
+
+            def test(subtests):
+                with subtests.test():
+                    timing.sleep(5)
+            """
+        )
+        [report] = [
+            x
+            for x in reprec.getreports("pytest_runtest_logreport")
+            if isinstance(x, SubtestReport)
+        ]
+        assert report.duration == 5
+        assert report.stop - report.start == 5
+
+    def test_unittest_subtest_is_unmeasured(self, pytester: Pytester) -> None:
+        reprec = pytester.inline_runsource(
+            """
+            import unittest
+
+            class T(unittest.TestCase):
+                def test(self):
+                    with self.subTest(msg="fails"):
+                        self.fail()
+            """
+        )
+        [report] = [
+            x
+            for x in reprec.getreports("pytest_runtest_logreport")
+            if isinstance(x, SubtestReport)
+        ]
+        assert (report.start, report.stop, report.duration) == (0, 0, 0)
 
 
 class TestReportSerialization:

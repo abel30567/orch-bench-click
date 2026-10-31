@@ -33,13 +33,13 @@ class Instant:
     # Creation time of this instant, using time.time(), to measure actual time.
     # Note: using a `lambda` to correctly get the mocked time via `MockTiming`.
     # pylint: disable-next=lambda-assignment
-    time: float = dataclasses.field(default_factory=lambda: time(), init=False)  # noqa: PLW0108
+    time: float = dataclasses.field(default_factory=lambda: time(), kw_only=True)  # noqa: PLW0108
 
     # Performance counter tick of the instant, used to measure precise elapsed time.
     # Note: using a `lambda` to correctly get the mocked time via `MockTiming`.
     perf_count: float = dataclasses.field(
         default_factory=lambda: perf_counter(),  # noqa: PLW0108
-        init=False,
+        kw_only=True,
     )
 
     def elapsed(self) -> Duration:
@@ -62,6 +62,12 @@ class Duration:
     def seconds(self) -> float:
         """Elapsed time of the duration in seconds, measured using a performance counter for precise timing."""
         return self.stop.perf_count - self.start.perf_count
+
+
+_EPOCH = Instant(time=0.0, perf_count=0.0)
+
+#: The duration of a call that was not measured.
+UNMEASURED = Duration(start=_EPOCH, stop=_EPOCH)
 
 
 @dataclasses.dataclass

@@ -1,0 +1,1 @@
+Subtests no longer report negative durations and wrong timestamps when the test mocks :func:`time.time` or :func:`time.perf_counter`, for example via ``freezegun`` or ``time-machine``.
