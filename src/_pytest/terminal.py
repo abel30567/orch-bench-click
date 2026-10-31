@@ -1093,9 +1093,10 @@ class TerminalReporter:
         if value is not None:
             return int(value)
         ini_value = self.config.getini("max_warnings")
-        if ini_value:
-            return int(ini_value)
-        return None
+        # An explicit 0 is a threshold, only an empty value means unset.
+        if ini_value is None or ini_value == "":
+            return None
+        return int(ini_value)
 
     #
     # Summaries for sessionfinish.
