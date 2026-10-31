@@ -1,0 +1,1 @@
+Formatting a ``RecursionError`` whose recursion origin cannot be located now shows only the first and last 10 stack frames (pass ``--full-trace`` to see all of them), and statement line numbers are now cached per AST node, which makes reporting such failures (including ``xfail`` ones) much faster.
