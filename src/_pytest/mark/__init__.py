@@ -7,6 +7,7 @@ from collections.abc import Collection
 from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 import dataclasses
+from typing import Any
 from typing import TYPE_CHECKING
 
 from .expression import Expression
@@ -258,13 +259,26 @@ class MarkMatcher:
         return False
 
 
+#: Key of ``config.workeroutput`` holding a usage error found on an xdist worker.
+WORKER_USAGE_ERROR_KEY = "_pytest_mark_usage_error"
+
+
 def deselect_by_mark(items: list[Item], config: Config) -> None:
     matchexpr = config.option.markexpr
     if not matchexpr:
         return
 
     expr = _parse_expression(matchexpr, "Wrong expression passed to '-m'")
-    _validate_marker_names(expr, config)
+    try:
+        _validate_marker_names(expr, config)
+    except UsageError as e:
+        if hasattr(config, "workerinput"):
+            # xdist ignores the exit status of workers and still schedules the
+            # items they publish, so hand the error over to the controller, see
+            # pytest_testnodedown.
+            config.workeroutput[WORKER_USAGE_ERROR_KEY] = str(e)  # type: ignore[attr-defined]
+            items.clear()
+        raise
     remaining: list[Item] = []
     deselected: list[Item] = []
     for item in items:
@@ -300,6 +314,18 @@ def _validate_marker_names(expr: Expression, config: Config) -> None:
         raise UsageError(
             f"Unknown marker(s) in '-m' expression: {', '.join(sorted(unknown))}"
         )
+
+
+@hookimpl(optionalhook=True)
+def pytest_testnodedown(node: Any) -> None:
+    """Raise on the xdist controller a usage error detected on a worker.
+
+    Markers can only be validated on workers, because the controller does not
+    collect and so does not load the conftest files which may register them.
+    """
+    workeroutput = getattr(node, "workeroutput", {})
+    if WORKER_USAGE_ERROR_KEY in workeroutput:
+        raise UsageError(workeroutput[WORKER_USAGE_ERROR_KEY])
 
 
 def pytest_collection_modifyitems(items: list[Item], config: Config) -> None:

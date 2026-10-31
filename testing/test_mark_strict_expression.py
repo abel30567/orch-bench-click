@@ -114,3 +114,48 @@ def test_strict_markers_takes_precedence_over_strict(pytester: Pytester) -> None
     )
     result = pytester.runpytest("-m", "typo")
     assert result.ret == ExitCode.NO_TESTS_COLLECTED
+
+
+@pytest.mark.usefixtures("marked_test")
+@pytest.mark.parametrize("numprocesses", ["1", "2"])
+def test_unknown_marker_in_expression_xdist(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch, numprocesses: str
+) -> None:
+    pytest.importorskip("xdist")
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+    result = pytester.runpytest_subprocess("-n", numprocesses, "--strict", "-m", "typo")
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*Unknown marker(s) in '-m' expression: typo"])
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
+
+
+def test_unknown_marker_in_expression_xdist_no_tests(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("xdist")
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+    result = pytester.runpytest_subprocess("-n2", "--strict", "-m", "typo")
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*Unknown marker(s) in '-m' expression: typo"])
+
+
+def test_marker_from_nested_conftest_in_expression_xdist(
+    pytester: Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only workers load this conftest, as the controller does not collect."""
+    pytest.importorskip("xdist")
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+    sub = pytester.mkdir("sub")
+    sub.joinpath("conftest.py").write_text(
+        "def pytest_configure(config):\n"
+        "    config.addinivalue_line('markers', 'subdyn: added by a conftest')\n",
+        encoding="utf-8",
+    )
+    sub.joinpath("test_sub.py").write_text(
+        "import pytest\n@pytest.mark.subdyn\ndef test_sub(): pass\n",
+        encoding="utf-8",
+    )
+    result = pytester.runpytest_subprocess("-n2", "--strict", "-m", "subdyn")
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=1)
