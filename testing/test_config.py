@@ -3253,6 +3253,40 @@ class TestNativeTomlConfig:
         with pytest.raises(TypeError, match=r"expects a string.*got int"):
             config.getini("string_not_string")
 
+    def test_truncation_limits_accept_int(self, pytester: Pytester) -> None:
+        """truncation_limit_lines/chars accept native TOML integers (#14692)."""
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            truncation_limit_lines = 0
+            truncation_limit_chars = 0
+            """
+        )
+        config = pytester.parseconfig()
+        assert config.getini("truncation_limit_lines") == 0
+        assert config.getini("truncation_limit_chars") == 0
+
+        pytester.makepyfile(
+            """
+            def test_failure():
+                assert list(range(100)) == list(range(1, 101))
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(failed=1)
+        result.stdout.no_fnmatch_line("*truncated*")
+
+    def test_truncation_limits_reject_string(self, pytester: Pytester) -> None:
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            truncation_limit_lines = "5"
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.raises(TypeError, match=r"expects an int.*got str"):
+            config.getini("truncation_limit_lines")
+
 
 class TestInicfgDeprecation:
     """Tests for the deprecation of config.inicfg."""

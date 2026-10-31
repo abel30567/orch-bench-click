@@ -67,10 +67,12 @@ def _get_truncation_parameters(config: Config) -> tuple[bool, TruncationBudget]:
     # 3. Both truncation_limit_lines and truncation_limit_chars
     #    .ini parameters are set to 0 explicitly.
     max_lines = config.getini("truncation_limit_lines")
-    max_lines = int(max_lines if max_lines is not None else DEFAULT_MAX_LINES)
+    if max_lines is None:
+        max_lines = DEFAULT_MAX_LINES
 
     max_chars = config.getini("truncation_limit_chars")
-    max_chars = int(max_chars if max_chars is not None else DEFAULT_MAX_CHARS)
+    if max_chars is None:
+        max_chars = DEFAULT_MAX_CHARS
 
     verbose = config.get_verbosity(Config.VERBOSITY_ASSERTIONS)
 
