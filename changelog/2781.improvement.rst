@@ -1,0 +1,1 @@
+When :confval:`strict_markers` is enabled, unknown marker names used in the ``-m`` expression now raise a usage error instead of silently deselecting all tests.

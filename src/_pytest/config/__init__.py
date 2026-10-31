@@ -36,6 +36,7 @@ from typing import Final
 from typing import final
 from typing import IO
 from typing import Literal
+from typing import NamedTuple
 from typing import TextIO
 from typing import TYPE_CHECKING
 import warnings
@@ -1044,6 +1045,12 @@ class _DeprecatedInicfgProxy(MutableMapping[str, Any]):
         return len(self._config._inicfg)
 
 
+class RegisteredMarker(NamedTuple):
+    """A marker registered via the ``markers`` configuration option."""
+
+    name: str
+
+
 @final
 class Config:
     """Access to configuration values, pluginmanager and plugin hooks.
@@ -1746,6 +1753,15 @@ class Config:
         x = self.getini(name)
         assert isinstance(x, list)
         x.append(line)  # modifies the cached list inline
+
+    def _iter_registered_markers(self) -> Iterator[RegisteredMarker]:
+        """Yield the markers registered via the ``markers`` ini option."""
+        for line in self.getini("markers"):
+            # Example lines: "skipif(condition): skip the given test if..."
+            # or "hypothesis: tests which use Hypothesis", so to get the
+            # marker name we split on both `:` and `(`.
+            name = line.split(":")[0].split("(")[0].strip()
+            yield RegisteredMarker(name)
 
     def getini(self, name: str) -> Any:
         """Return configuration value the an :ref:`configuration file <configfiles>`.

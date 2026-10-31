@@ -264,6 +264,7 @@ def deselect_by_mark(items: list[Item], config: Config) -> None:
         return
 
     expr = _parse_expression(matchexpr, "Wrong expression passed to '-m'")
+    _validate_marker_names(expr, config)
     remaining: list[Item] = []
     deselected: list[Item] = []
     for item in items:
@@ -274,6 +275,24 @@ def deselect_by_mark(items: list[Item], config: Config) -> None:
     if deselected:
         config.hook.pytest_deselected(items=deselected)
         items[:] = remaining
+
+
+def _validate_marker_names(expr: Expression, config: Config) -> None:
+    """Raise UsageError if the ``-m`` expression uses unregistered markers
+    and strict markers mode is enabled."""
+    strict_markers = config.getini("strict_markers")
+    if strict_markers is None:
+        strict_markers = config.getini("strict")
+    if not strict_markers:
+        return
+
+    registered = {marker.name for marker in config._iter_registered_markers()}
+    unknown = expr.idents() - registered
+    if unknown:
+        raise UsageError(
+            "Unknown marker(s) in '-m' expression: "
+            + ", ".join(sorted(unknown))
+        )
 
 
 def _parse_expression(expr: str, exc_message: str) -> Expression:
