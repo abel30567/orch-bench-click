@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup
         run: |
           python3 -m venv .venv && SETUPTOOLS_SCM_PRETEND_VERSION=10.0.0.dev0 .venv/bin/python -m pip install -q -e '.[dev]'
