@@ -36,6 +36,7 @@ from typing import Final
 from typing import final
 from typing import IO
 from typing import Literal
+from typing import NamedTuple
 from typing import TextIO
 from typing import TYPE_CHECKING
 import warnings
@@ -1020,6 +1021,12 @@ def _iter_rewritable_modules(package_files: Iterable[str]) -> Iterator[str]:
             yield from _iter_rewritable_modules(new_package_files)
 
 
+class RegisteredMarker(NamedTuple):
+    """A marker registered via the ``markers`` configuration option."""
+
+    name: str
+
+
 class _DeprecatedInicfgProxy(MutableMapping[str, Any]):
     """Compatibility proxy for the deprecated Config.inicfg."""
 
@@ -1738,6 +1745,15 @@ class Config:
                     location=location,
                 )
             )
+
+    def _iter_registered_markers(self) -> Iterator[RegisteredMarker]:
+        """Yield the markers registered via the ``markers`` configuration option."""
+        for line in self.getini("markers"):
+            # example lines: "skipif(condition): skip the given test if..."
+            # or "hypothesis: tests which use Hypothesis", so to get the
+            # marker name we split on both `:` and `(`.
+            name = line.split(":")[0].split("(")[0].strip()
+            yield RegisteredMarker(name)
 
     def addinivalue_line(self, name: str, line: str) -> None:
         """Add a line to a configuration option. The option must have been

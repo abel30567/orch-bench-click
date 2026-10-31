@@ -2797,3 +2797,68 @@ def test_strict_parametrization_ids_with_hidden_param(pytester: Pytester) -> Non
             "Duplicates:     a",
         ]
     )
+
+
+def test_expression_idents() -> None:
+    from _pytest.mark.expression import Expression
+
+    expr = Expression.compile("(a or b) and not c(x=1, y='z')")
+    assert expr.idents() == frozenset({"a", "b", "c"})
+    assert Expression.compile("").idents() == frozenset()
+
+
+def test_iter_registered_markers(pytester: Pytester) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        markers =
+            slow: marks tests as slow
+            serial
+            withargs(arg): a marker with args
+        """
+    )
+    config = pytester.parseconfig()
+    names = [m.name for m in config._iter_registered_markers()]
+    assert {"slow", "serial", "withargs"} <= set(names)
+
+
+@pytest.mark.parametrize(
+    "option", ["--strict-markers", "--strict", "-o=strict_markers=true"]
+)
+def test_strict_markers_unknown_in_markexpr(pytester: Pytester, option: str) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        markers =
+            slow: marks tests as slow
+        """
+    )
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest(option, "-m", "slow or not (typo1 and typo2)")
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Unknown marker(s) in '-m' expression: typo1, typo2"]
+    )
+
+
+def test_strict_markers_known_in_markexpr(pytester: Pytester) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        markers =
+            slow: marks tests as slow
+        """
+    )
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest("--strict-markers", "-m", "not slow and not skip")
+    result.assert_outcomes(passed=1)
+
+
+def test_strict_markers_disabled_unknown_in_markexpr(pytester: Pytester) -> None:
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest("-m", "typo")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
+    result = pytester.runpytest(
+        "-o", "strict=true", "-o", "strict_markers=false", "-m", "typo"
+    )
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
