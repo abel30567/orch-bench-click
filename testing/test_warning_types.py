@@ -74,7 +74,7 @@ def test_deprecated_does_not_hold_warning_instances(name: str) -> None:
     ids=lambda w: w.template[:30],
 )
 def test_deprecated_format_returns_fresh_instance(
-    unformatted: warning_types.UnformattedWarning[Warning],
+    unformatted: warning_types.UnformattedWarning[warning_types.PytestWarning],
 ) -> None:
     first = unformatted.format()
     assert isinstance(first, unformatted.category)
