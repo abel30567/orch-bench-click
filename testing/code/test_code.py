@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from types import FrameType
@@ -11,7 +12,11 @@ from _pytest._code import ExceptionInfo
 from _pytest._code import Frame
 from _pytest._code import Source
 from _pytest._code.code import ExceptionChainRepr
+from _pytest._code.code import ExceptionInfoFormatter
 from _pytest._code.code import ReprFuncArgs
+from _pytest._code.code import Traceback
+from _pytest._code.source import _statement_linenos
+from _pytest._code.source import get_statement_startend2
 import pytest
 
 
@@ -195,6 +200,85 @@ class TestTracebackEntry:
         pattern = r"  File '.*test_code.py':\d+ in test_tb_entry_str\n  assert False"
         entry = str(exci.traceback[0])
         assert re.match(pattern, entry)
+
+
+def test_recursionindex_ignores_reraise_in_same_frame() -> None:
+    def f() -> None:
+        exc = ValueError()
+        for _ in range(3):
+            try:
+                raise exc
+            except ValueError:
+                pass
+        raise exc
+
+    with pytest.raises(ValueError) as excinfo:
+        f()
+    assert excinfo.traceback.recursionindex() is None
+
+
+class TestTruncateRecursiveTraceback:
+    @staticmethod
+    def recursive_traceback(depth: int) -> Traceback:
+        def f(x: int) -> None:
+            if x >= depth:
+                raise RecursionError
+            f(x + 1)
+
+        with pytest.raises(RecursionError) as excinfo:
+            f(1)
+        # Skip the test function's frame.
+        return excinfo.traceback[1:]
+
+    def test_origin_not_found(self) -> None:
+        traceback = self.recursive_traceback(25)
+        truncated, extraline = ExceptionInfoFormatter()._truncate_recursive_traceback(
+            traceback
+        )
+        assert list(truncated) == traceback[:10] + traceback[-10:]
+        assert extraline == (
+            "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+            "  Displaying first and last 10 stack frames out of 25.\n"
+            "  Pass `--full-trace` to see all frames."
+        )
+
+    def test_callable_tbfilter_is_truncated(self) -> None:
+        traceback = self.recursive_traceback(25)
+        formatter = ExceptionInfoFormatter(tbfilter=lambda excinfo: excinfo.traceback)
+        truncated, extraline = formatter._truncate_recursive_traceback(traceback)
+        assert len(truncated) == 20
+        assert extraline is not None
+
+    def test_short_traceback_is_kept(self) -> None:
+        traceback = self.recursive_traceback(20)
+        truncated, extraline = ExceptionInfoFormatter()._truncate_recursive_traceback(
+            traceback
+        )
+        assert truncated == traceback
+        assert extraline is None
+
+    def test_no_tbfilter_is_kept(self) -> None:
+        traceback = self.recursive_traceback(25)
+        formatter = ExceptionInfoFormatter(tbfilter=False)
+        truncated, extraline = formatter._truncate_recursive_traceback(traceback)
+        assert truncated == traceback
+        assert extraline is None
+
+
+def test_statement_linenos() -> None:
+    node = ast.parse(
+        "@deco\n"
+        "def f():\n"
+        "    try:\n"
+        "        pass\n"
+        "    finally:\n"
+        "        pass\n"
+    )
+    linenos = _statement_linenos(node)
+    assert linenos == [0, 1, 2, 3, 4, 5]
+    assert _statement_linenos(node) is linenos
+    assert get_statement_startend2(3, node) == (3, 4)
+    assert get_statement_startend2(5, node) == (5, None)
 
 
 class TestReprFuncArgs:

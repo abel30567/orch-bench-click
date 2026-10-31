@@ -446,7 +446,7 @@ class Traceback(list[TracebackEntry]):
     def recursionindex(self) -> int | None:
         """Return the index of the frame/TracebackEntry where recursion originates if
         appropriate, None if no recursion occurred."""
-        cache: dict[tuple[Any, int, int], list[dict[str, Any]]] = {}
+        cache: dict[tuple[Any, int, int], list[tuple[FrameType, dict[str, Any]]]] = {}
         for i, entry in enumerate(self):
             # id for the code.raw is needed to work around
             # the strange metaprogramming in the decorator lib from pypi
@@ -455,12 +455,15 @@ class Traceback(list[TracebackEntry]):
             key = entry.frame.code.path, id(entry.frame.code.raw), entry.lineno
             values = cache.setdefault(key, [])
             # Since Python 3.13 f_locals is a proxy, freeze it.
-            loc = dict(entry.frame.f_locals)
+            frame = entry.frame.raw
+            loc = dict(frame.f_locals)
             if values:
-                for otherloc in values:
-                    if otherloc == loc:
+                for otherframe, otherloc in values:
+                    # An exception re-raised within a frame adds another entry
+                    # for that same frame, which isn't recursion.
+                    if otherframe is not frame and otherloc == loc:
                         return i
-            values.append(loc)
+            values.append((frame, loc))
         return None
 
 
@@ -1166,11 +1169,15 @@ class ExceptionInfoFormatter:
         exception (for example comparing numpy arrays using equality raises a
         TypeError), in which case we do our best to warn the user of the
         error and show a limited traceback.
+
+        If the origin can't be located (for example the locals differ in every
+        frame), formatting every frame would be slow and not very useful, so
+        also show a limited traceback, unless a full trace was requested.
         """
+        max_frames = 10
         try:
             recursionindex = traceback.recursionindex()
         except Exception as e:
-            max_frames = 10
             extraline: str | None = (
                 "!!! Recursion error detected, but an error occurred locating the origin of recursion.\n"
                 "  The following exception happened when comparing locals in the stack frame:\n"
@@ -1184,6 +1191,15 @@ class ExceptionInfoFormatter:
             if recursionindex is not None:
                 extraline = "!!! Recursion detected (same locals & position)"
                 traceback = traceback[: recursionindex + 1]
+            elif self.tbfilter is not False and len(traceback) > 2 * max_frames:
+                extraline = (
+                    "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+                    f"  Displaying first and last {max_frames} stack frames out of {len(traceback)}.\n"
+                    "  Pass `--full-trace` to see all frames."
+                )
+                # Type ignored because adding two instances of a List subtype
+                # currently incorrectly has type List instead of the subtype.
+                traceback = traceback[:max_frames] + traceback[-max_frames:]  # type: ignore
             else:
                 extraline = None
 
