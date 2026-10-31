@@ -1951,6 +1951,18 @@ class Config:
         elif type == "bool":
             return _strtobool(str(value).strip())
         elif type == "string":
+            if not isinstance(value, str):
+                # Only reachable from [tool.pytest.ini_options], where TOML
+                # arrays are kept as lists.
+                warnings.warn(
+                    _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
+                        name=name,
+                        type_name=builtins.type(value).__name__,
+                        value=value,
+                    ),
+                    # _getini_ini -> _getini_value -> _getini -> getini -> caller.
+                    stacklevel=5,
+                )
             return value
         elif type == "int":
             if not isinstance(value, str):
