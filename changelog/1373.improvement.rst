@@ -1,0 +1,1 @@
+When :confval:`strict_markers` (or :confval:`strict`) is enabled, pytest now fails with a usage error if the :option:`-m` expression references markers which are not registered.

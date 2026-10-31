@@ -2797,3 +2797,42 @@ def test_strict_parametrization_ids_with_hidden_param(pytester: Pytester) -> Non
             "Duplicates:     a",
         ]
     )
+
+
+@pytest.mark.parametrize("option_name", ["strict_markers", "strict"])
+def test_strict_markers_unknown_marker_in_markexpr(
+    pytester: Pytester, option_name: str
+) -> None:
+    pytester.makeini(
+        f"""
+        [pytest]
+        {option_name} = true
+        markers =
+            registered: a registered marker
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.registered
+        def test_one():
+            pass
+        """
+    )
+
+    result = pytester.runpytest("-m", "registered and not (typo or other(x=1))")
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Unknown marker(s) in '-m' expression: other, typo"]
+    )
+
+    # Builtin markers are registered, and keyword argument names are ignored.
+    result = pytester.runpytest("-m", "registered or skipif(reason=1)")
+    result.assert_outcomes(passed=1)
+
+
+def test_unknown_marker_in_markexpr_without_strict(pytester: Pytester) -> None:
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest("-m", "typo")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
