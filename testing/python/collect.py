@@ -1748,3 +1748,678 @@ def test_collection_hierarchy(pytester: Pytester) -> None:
         ],
         consecutive=True,
     )
+
+
+class TestFixtureDefinitionSubclass:
+    def test_exposed(self) -> None:
+        from _pytest.fixtures import FixtureFunctionDefinition
+
+        assert pytest.FixtureFunctionDefinition is FixtureFunctionDefinition
+
+    def test_subclass_discovered(self, pytester: Pytester) -> None:
+        """Instances of subclasses, including ones with a custom __init__, are
+        discovered as fixtures in modules and classes, and keep their type."""
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Sub(pytest.FixtureFunctionDefinition):
+                def __init__(self, function, extra):
+                    super().__init__(
+                        function=function,
+                        fixture_function_marker=pytest.fixture(scope="module"),
+                    )
+                    self.extra = extra
+
+                def __iter__(self):
+                    return iter([self.extra])
+
+            def sub(extra):
+                return lambda function: Sub(function, extra)
+
+            @sub("extra")
+            def mod_fix():
+                return "mod"
+
+            class TestIt:
+                @sub("extra")
+                def cls_fix(self):
+                    return 1
+
+                def test_it(self, mod_fix, cls_fix):
+                    assert mod_fix == "mod"
+                    assert cls_fix == 1
+                    assert type(TestIt.__dict__["cls_fix"]) is Sub
+                    assert type(TestIt.cls_fix) is Sub
+                    assert type(self.cls_fix) is Sub
+                    assert list(self.cls_fix) == ["extra"]
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_subclass_with_custom_new_in_class(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Sub(pytest.FixtureFunctionDefinition):
+                def __new__(cls, function, extra):
+                    return super().__new__(cls)
+
+                def __init__(self, function, extra):
+                    super().__init__(
+                        function=function,
+                        fixture_function_marker=pytest.fixture(),
+                    )
+
+            class TestIt:
+                @(lambda function: Sub(function, "extra"))
+                def cls_fix(self):
+                    return 1
+
+                def test_it(self, cls_fix):
+                    assert cls_fix == 1
+                    assert type(self.cls_fix) is Sub
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_subclass_with_slots_in_class(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Base(pytest.FixtureFunctionDefinition):
+                __slots__ = ("inherited", "__private", "unset")
+
+            class Sub(Base):
+                __slots__ = "single"
+
+                def __init__(self, function):
+                    super().__init__(
+                        function=function,
+                        fixture_function_marker=pytest.fixture(),
+                    )
+                    self.inherited = 1
+                    self._Base__private = 2
+                    self.single = 3
+
+            class TestIt:
+                @Sub
+                def cls_fix(self):
+                    return 4
+
+                def test_it(self, cls_fix):
+                    assert cls_fix == 4
+                    for fix in (self.cls_fix, TestIt.cls_fix):
+                        assert type(fix) is Sub
+                        assert fix.inherited == 1
+                        assert fix._Base__private == 2
+                        assert fix.single == 3
+                        assert not hasattr(fix, "unset")
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+
+@pytest.mark.filterwarnings("default::pytest.PytestWarning")
+class TestWrappedFixture:
+    DECORATOR = """
+        import functools
+        import pytest
+
+        def deco(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+    """
+
+    def test_custom_decorator(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        @deco
+        @pytest.fixture
+        def wrapped():
+            return 1
+
+        def test_it(wrapped):
+            pass
+        """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'wrapped' not found*",
+                "*test_custom_decorator.py:*: PytestWarning: cannot discover fixture"
+                " 'wrapped' due to being wrapped in decorators",
+            ]
+        )
+
+    @pytest.mark.parametrize(
+        "decorators",
+        [
+            ("@deco", "@deco"),
+            ("@staticmethod", "@deco"),
+            ("@classmethod", "@deco"),
+            ("@deco", "@classmethod"),
+            ("@deco", "@staticmethod"),
+        ],
+    )
+    def test_custom_decorator_stacked(
+        self, pytester: Pytester, decorators: tuple[str, str]
+    ) -> None:
+        pytester.makepyfile(
+            self.DECORATOR
+            + f"""
+        class TestIt:
+            {decorators[0]}
+            {decorators[1]}
+            @pytest.fixture
+            def wrapped(*args):
+                return 1
+
+            def test_it(self, wrapped):
+                pass
+        """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'wrapped' not found*",
+                "*cannot discover fixture 'wrapped' due to being wrapped in decorators",
+            ]
+        )
+
+    def test_named_fixture_in_conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            self.DECORATOR
+            + """
+        @deco
+        @pytest.fixture(name="real_name")
+        def attr_name():
+            return 1
+        """
+        )
+        pytester.makepyfile("def test_it(real_name): pass")
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'real_name' not found*",
+                "*conftest.py:*cannot discover fixture 'real_name' due to being"
+                " wrapped in decorators",
+            ]
+        )
+
+    def test_classmethod_above_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @classmethod
+                @pytest.fixture
+                def wrapped(cls):
+                    return 1
+
+                def test_it(self, wrapped):
+                    pass
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*fixture 'wrapped' not found*",
+                "*test_classmethod_above_fixture.py:*: PytestWarning: cannot discover"
+                " fixture 'wrapped' because it is wrapped by @classmethod;"
+                " place @pytest.fixture above @classmethod",
+            ]
+        )
+
+    def test_staticmethod_above_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @staticmethod
+                @pytest.fixture
+                def wrapped():
+                    return 1
+
+                def test_it(self, wrapped):
+                    assert wrapped == 1
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*test_staticmethod_above_fixture.py:*: PytestWarning: fixture"
+                " 'wrapped' is wrapped by @staticmethod above @pytest.fixture;"
+                " place @pytest.fixture above @staticmethod",
+            ]
+        )
+
+    def test_staticmethod_above_fixture_in_module(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @staticmethod
+            @pytest.fixture
+            def wrapped():
+                return 1
+
+            def test_it(wrapped):
+                assert wrapped == 1
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
+
+    def test_warned_once_for_inherited_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class Base:
+                @classmethod
+                @pytest.fixture
+                def wrapped(cls):
+                    return 1
+
+            class TestA(Base):
+                def test_it(self):
+                    pass
+
+            class TestB(Base):
+                def test_it(self):
+                    pass
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=2, warnings=1)
+
+    def test_fixture_above_descriptors_no_warning(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            class TestIt:
+                @pytest.fixture
+                @classmethod
+                def cls_fix(cls):
+                    return cls
+
+                @pytest.fixture
+                @staticmethod
+                def static_fix():
+                    return 1
+
+                def test_it(self, cls_fix, static_fix):
+                    assert cls_fix is TestIt
+                    assert static_fix == 1
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_fixture_above_custom_decorator_no_warning(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        @pytest.fixture
+        @deco
+        def fix():
+            return 1
+
+        def test_it(fix):
+            assert fix == 1
+        """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_lookalikes_ignored(self, pytester: Pytester) -> None:
+        """Objects which claim to have any attribute must neither be mistaken for
+        a fixture, nor crash discovery."""
+        pytester.makepyfile(
+            """
+            from unittest import mock
+            import functools
+            import pytest
+
+            @pytest.fixture
+            def fix():
+                return 1
+
+            class Magic:
+                def __getattr__(self, name):
+                    return Magic()
+
+            class Cycle:
+                pass
+
+            magic = Magic()
+            mock_call = mock.call
+            magic_mock = mock.MagicMock()
+            spec_mock = mock.Mock(spec=fix)
+            cycle = Cycle()
+            cycle.__wrapped__ = cycle
+            wrapped_plain = functools.wraps(print)(lambda: None)
+
+            class UnhashableMeta(type):
+                def __eq__(cls, other):
+                    return cls is other
+
+            class Unhashable(metaclass=UnhashableMeta):
+                pass
+
+            unhashable = Unhashable()
+
+            class TestIt:
+                magic = Magic()
+                spec_mock = mock.Mock(spec=fix)
+                unhashable = Unhashable()
+
+                def test_it(self):
+                    pass
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_lookalikes_ignored_in_conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            class UnhashableMeta(type):
+                def __eq__(cls, other):
+                    return cls is other
+
+            class Unhashable(metaclass=UnhashableMeta):
+                pass
+
+            unhashable = Unhashable()
+            """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_legacy_fixtures_requested_in_class(self, pytester: Pytester) -> None:
+        """Regression test: the builtin fixtures defined with @pytest.fixture above
+        @staticmethod in a plugin registered as a class don't bind the test instance."""
+        pytester.makepyfile(
+            """
+            import pytest
+
+            def test_function(tmpdir, tmpdir_factory, testdir):
+                pass
+
+            class TestIt:
+                @pytest.fixture
+                def from_fixture(self, tmpdir):
+                    return tmpdir
+
+                def test_method(self, tmpdir, tmpdir_factory, testdir, from_fixture):
+                    assert tmpdir == from_fixture
+            """
+        )
+        result = pytester.runpytest("-p", "pytester")
+        result.assert_outcomes(passed=2)
+
+    @pytest.mark.parametrize("request_from", ["function", "method"])
+    def test_fixture_above_descriptors_in_plugin_class(
+        self, pytester: Pytester, request_from: str
+    ) -> None:
+        pytester.makeconftest(
+            """
+            import pytest
+
+            class Plugin:
+                value = "cls"
+
+                @pytest.fixture
+                @staticmethod
+                def static_fix(tmp_path):
+                    return tmp_path
+
+                @pytest.fixture
+                @classmethod
+                def cls_fix(cls, tmp_path):
+                    return cls.value
+
+            def pytest_configure(config):
+                config.pluginmanager.register(Plugin, "class-plugin")
+            """
+        )
+        args = "static_fix, cls_fix"
+        body = "assert cls_fix == 'cls'"
+        if request_from == "function":
+            pytester.makepyfile(f"def test_it({args}): {body}")
+        else:
+            pytester.makepyfile(
+                f"""
+                class TestIt:
+                    def test_it(self, {args}): {body}
+                """
+            )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_fixture_above_staticmethod_in_module_requested_in_class(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.fixture
+            @staticmethod
+            def fix(tmp_path):
+                return tmp_path
+
+            class TestIt:
+                def test_it(self, fix):
+                    pass
+            """
+        )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    @pytest.fixture(params=["cmdline", "pytest_plugins", "conftest"])
+    def wrapped_outside_of_collectors(
+        self, request: pytest.FixtureRequest, pytester: Pytester
+    ) -> list[str]:
+        """Define a wrapped fixture which isn't parsed by a Module's collect(),
+        returning the arguments to run pytest with."""
+        source = (
+            self.DECORATOR
+            + """
+        @deco
+        @pytest.fixture
+        def wrapped():
+            return 1
+        """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        if request.param == "conftest":
+            pytester.makeconftest(source)
+            return []
+        pytester.makepyfile(myplug=source)
+        pytester.syspathinsert()
+        if request.param == "cmdline":
+            return ["-p", "myplug"]
+        pytester.makeconftest("pytest_plugins = ['myplug']")
+        return []
+
+    def test_outside_of_collectors_in_summary(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*warnings summary*",
+                "*.py:*cannot discover fixture 'wrapped' due to being wrapped in"
+                " decorators",
+            ]
+        )
+
+    STRICT_INI = """
+        [pytest]
+        filterwarnings = error
+        """
+
+    def test_outside_of_collectors_as_error(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        assert result.ret == pytest.ExitCode.INTERRUPTED
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*.py:*: cannot discover fixture 'wrapped' due to being wrapped in"
+                " decorators",
+            ]
+        )
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+        result.stderr.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_outside_of_collectors_as_error_keeps_collection_errors(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(test_broken="1 / 0")
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        assert result.ret == pytest.ExitCode.INTERRUPTED
+        result.assert_outcomes(errors=2)
+        result.stdout.fnmatch_lines(["*ZeroDivisionError*", "*Interrupted: 2 errors*"])
+
+    def test_outside_of_collectors_as_error_keeps_usage_errors(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        result = pytester.runpytest(*wrapped_outside_of_collectors, "missing.py")
+        assert result.ret == pytest.ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(["ERROR: *not found*missing.py*"])
+
+    def test_outside_of_collectors_with_xdist(
+        self,
+        pytester: Pytester,
+        wrapped_outside_of_collectors: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pytest.importorskip("xdist")
+        monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+        pytester.makeini(self.STRICT_INI)
+        result = pytester.runpytest_subprocess(
+            *wrapped_outside_of_collectors, "-n2", "-pxdist"
+        )
+        assert result.ret == pytest.ExitCode.TESTS_FAILED
+        result.stdout.fnmatch_lines(
+            ["*.py:*: cannot discover fixture 'wrapped' due to being wrapped in*"]
+        )
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    @pytest.mark.parametrize("option", ["--fixtures", "--fixtures-per-test"])
+    def test_outside_of_collectors_as_error_informational_options(
+        self,
+        pytester: Pytester,
+        wrapped_outside_of_collectors: list[str],
+        option: str,
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(
+            test_uses_fixture="""
+            import pytest
+
+            @pytest.fixture
+            def listed():
+                pass
+
+            def test_listed(listed):
+                pass
+            """
+        )
+        result = pytester.runpytest(*wrapped_outside_of_collectors, option)
+        assert result.ret == pytest.ExitCode.OK
+        result.stdout.fnmatch_lines(["*listed*", "*cannot discover fixture 'wrapped'*"])
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    @pytest.mark.parametrize(
+        "hook", ["pytest_collection_finish(session)", "pytest_runtestloop(session)"]
+    )
+    def test_plugin_registered_after_collection_as_error(
+        self, pytester: Pytester, hook: str
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makeconftest(
+            self.DECORATOR
+            + f"""
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def late(self):
+                return 1
+
+        @pytest.hookimpl(tryfirst=True)
+        def {hook}:
+            session.config.pluginmanager.register(Plugin())
+        """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(["*cannot discover fixture 'late'*"])
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_plugin_registered_during_test_as_error(self, pytester: Pytester) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def late(self):
+                return 1
+
+        def test_it(pytestconfig):
+            pytestconfig.pluginmanager.register(Plugin())
+        """
+        )
+        result = pytester.runpytest()
+        assert result.ret == pytest.ExitCode.TESTS_FAILED
+        result.assert_outcomes(passed=1, errors=1)
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_plugin_registered_after_collection(self, pytester: Pytester) -> None:
+        """Warnings aren't deferred once there's no end of collection to wait for."""
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def wrapped(self):
+                return 1
+
+        def test_it(pytestconfig):
+            pytestconfig.pluginmanager.register(Plugin())
+        """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1, warnings=1)
