@@ -1,0 +1,1 @@
+Subtest durations and timestamps are no longer affected by tests mocking the :mod:`time` module (for example with ``freezegun`` or ``time-machine``), which could previously result in negative durations.

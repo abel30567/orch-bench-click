@@ -455,6 +455,32 @@ class TestReportSerialization:
             loaded_report = TestReport._from_json(data)
             assert loaded_report.stop - loaded_report.start == approx(report.duration)
 
+    def test_subtest_report_timing_ignores_mocked_time(
+        self, pytester: Pytester
+    ) -> None:
+        """Subtests must use _pytest.timing, so tests mocking "time" do not
+        affect the reported timing information."""
+        reprec = pytester.inline_runsource(
+            """
+            import time
+
+            def test_with_subtest(subtests, monkeypatch):
+                with subtests.test(msg="frozen clock"):
+                    monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                    monkeypatch.setattr("time.time", lambda: 0.0)
+        """
+        )
+        reports = [
+            r
+            for r in reprec.getreports("pytest_runtest_logreport")
+            if r.when == "call"
+        ]
+        assert len(reports) == 2
+        for report in reports:
+            assert report.duration >= 0
+            assert report.start > 0
+            assert report.stop >= report.start
+
     @pytest.mark.parametrize(
         "first_skip_reason, second_skip_reason, skip_reason_output",
         [("A", "B", "(A; B)"), ("A", "A", "(A)")],
