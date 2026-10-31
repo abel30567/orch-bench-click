@@ -537,6 +537,57 @@ class TestParseIni:
         result = pytester.runpytest("-pno:warnings")
         result.stdout.no_fnmatch_line("*PytestConfigWarning*")
 
+    @pytest.mark.parametrize("source", ["ini", "cmdline"])
+    def test_warning_filters_apply_to_conftest_pytest_configure(
+        self, pytester: Pytester, source: str
+    ) -> None:
+        """Warning filters are applied to pytest_configure in conftest files."""
+        pytester.makeconftest(
+            """
+            import warnings
+            def pytest_configure(config):
+                warnings.warn("custom configure warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        args = []
+        if source == "ini":
+            pytester.makeini(
+                """
+                [pytest]
+                filterwarnings = ignore::UserWarning
+                """
+            )
+        else:
+            args = ["-W", "ignore::UserWarning"]
+        result = pytester.runpytest_subprocess(*args)
+        result.assert_outcomes(passed=1)
+        result.stdout.no_fnmatch_line("*custom configure warning*")
+        result.stderr.no_fnmatch_line("*custom configure warning*")
+
+    def test_error_filter_applies_to_conftest_pytest_configure(
+        self, pytester: Pytester
+    ) -> None:
+        """An 'error' filter turns warnings from pytest_configure in conftest files into errors."""
+        pytester.makeconftest(
+            """
+            import warnings
+            def pytest_configure(config):
+                warnings.warn("custom configure warning", UserWarning)
+            """
+        )
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error::UserWarning
+            """
+        )
+        pytester.makepyfile("def test_pass(): pass")
+        result = pytester.runpytest_subprocess()
+        assert result.ret == pytest.ExitCode.INTERNAL_ERROR
+        result.stdout.no_fnmatch_line("*1 passed*")
+        result.stderr.fnmatch_lines(["*UserWarning: custom configure warning*"])
+
     @pytest.mark.parametrize(
         "ini_file_text, plugin_version, exception_text",
         [
