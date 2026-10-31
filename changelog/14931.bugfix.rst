@@ -1,0 +1,1 @@
+Fixed pytest's own deprecation warnings sharing a single warning instance, which made failure reports under ``-W error`` show stale traceback frames from earlier failures.
