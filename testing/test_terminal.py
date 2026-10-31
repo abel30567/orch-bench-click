@@ -3576,3 +3576,63 @@ class TestTerminalProgressPlugin:
         # Session finish - should remove progress.
         plugin.pytest_sessionfinish()
         assert "\x1b]9;4;0;\x1b\\" in mock_file.getvalue()
+
+
+class TestMaxWarningsConfig:
+    """Native TOML integers and strings are both accepted for ``max_warnings`` (#14954)."""
+
+    @pytest.fixture(autouse=True)
+    def _warning_test(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import warnings
+
+            def test_warning():
+                warnings.warn(UserWarning("example warning"))
+            """
+        )
+
+    @pytest.mark.parametrize(
+        ("filename", "section"),
+        [("pytest.toml", "[pytest]"), ("pyproject.toml", "[tool.pytest]")],
+    )
+    @pytest.mark.parametrize("value", ["0", '"0"'])
+    def test_toml_exceeded(
+        self, pytester: Pytester, filename: str, section: str, value: str
+    ) -> None:
+        pytester.path.joinpath(filename).write_text(
+            f"{section}\nmax_warnings = {value}\n", encoding="utf-8"
+        )
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
+        result.stdout.fnmatch_lines(
+            ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
+        )
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+    @pytest.mark.parametrize("value", ["1", '"1"'])
+    def test_toml_not_exceeded(self, pytester: Pytester, value: str) -> None:
+        pytester.makefile(".toml", pytest=f"[pytest]\nmax_warnings = {value}\n")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
+        assert result.ret == ExitCode.OK
+
+    def test_ini_zero(self, pytester: Pytester) -> None:
+        pytester.makeini("[pytest]\nmax_warnings = 0\n")
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+    def test_unset(self, pytester: Pytester) -> None:
+        result = pytester.runpytest(
+            "-qq", "--disable-warnings", "-W", "always::UserWarning"
+        )
+        assert result.ret == ExitCode.OK
+
+    def test_getini_native_int(self, pytester: Pytester) -> None:
+        pytester.makefile(".toml", pytest="[pytest]\nmax_warnings = 0\n")
+        config = pytester.parseconfig()
+        assert config.getini("max_warnings") == 0

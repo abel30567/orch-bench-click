@@ -3671,7 +3671,7 @@ All the command-line flags can also be obtained by running ``pytest --help``::
                             Each line specifies a pattern for
                             warnings.filterwarnings. Processed after
                             -W/--pythonwarnings.
-      max_warnings (string):
+      max_warnings (int | string):
                             Exit with error if all tests pass but the number of
                             warnings exceeds this threshold
       norecursedirs (args): Directory patterns to avoid for recursion
