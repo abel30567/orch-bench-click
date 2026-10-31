@@ -364,3 +364,71 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+class TestIniStringNonStringValue:
+    MESSAGE = "Passing a value that is not a string to a 'string'-typed ini option"
+
+    @staticmethod
+    def addini(pytester: Pytester, type_: str = "'string'") -> None:
+        pytester.makeconftest(
+            f"""
+            def pytest_addoption(parser):
+                parser.addini("foo", "", type={type_}, default="")
+            """
+        )
+
+    @pytest.mark.parametrize("type_", ["'string'", "None", "str", "int | str"])
+    def test_list_is_returned_with_warning(
+        self, pytester: Pytester, type_: str
+    ) -> None:
+        self.addini(pytester, type_)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            foo = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.warns(pytest.PytestRemovedIn10Warning) as records:
+            assert config.getini("foo") == ["a", "b"]
+        assert len(records) == 1
+        message = str(records[0].message)
+        assert message.startswith(self.MESSAGE)
+        assert "config option 'foo' got: ['a', 'b']" in message
+        assert records[0].filename == __file__
+
+    def test_warning_is_shown_when_read_in_configure(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            def pytest_addoption(parser):
+                parser.addini("foo", "")
+
+            def pytest_configure(config):
+                assert config.getini("foo") == ["a"]
+            """
+        )
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            foo = ["a"]
+            """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        result = pytester.runpytest_subprocess()
+        result.assert_outcomes(passed=1)
+        result.stderr.fnmatch_lines([f"*PytestRemovedIn10Warning: {self.MESSAGE}*"])
+
+    @pytest.mark.filterwarnings("error::pytest.PytestRemovedIn10Warning")
+    @pytest.mark.parametrize("value", ['"a"', "1"])
+    def test_scalars_do_not_warn(self, pytester: Pytester, value: str) -> None:
+        self.addini(pytester)
+        pytester.makepyprojecttoml(f"[tool.pytest.ini_options]\nfoo = {value}")
+        assert pytester.parseconfig().getini("foo") == value.strip('"')
+
+    def test_toml_mode_still_raises(self, pytester: Pytester) -> None:
+        self.addini(pytester)
+        pytester.makepyprojecttoml('[tool.pytest]\nfoo = ["a"]')
+        config = pytester.parseconfig()
+        with pytest.raises(pytest.UsageError, match="expects a string"):
+            config.getini("foo")
