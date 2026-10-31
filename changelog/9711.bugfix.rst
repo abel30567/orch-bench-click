@@ -1,0 +1,1 @@
+Warnings issued by ``pytest_configure`` hooks of plugins and ``conftest.py`` files now respect the configured warning filters (``filterwarnings`` ini option and ``-W``).

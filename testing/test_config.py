@@ -3101,6 +3101,40 @@ class TestInicfgDeprecation:
         assert result.ret == 0
 
 
+def test_conftest_pytest_configure_warning_respects_filterwarnings(
+    pytester: Pytester,
+) -> None:
+    """Warnings issued in conftest pytest_configure honor ini filters (#9711)."""
+    pytester.makeconftest(
+        """
+        import warnings
+
+        def pytest_configure(config):
+            warnings.warn("conftest configure warning", UserWarning)
+        """
+    )
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings = error::UserWarning
+        """
+    )
+    pytester.makepyfile("def test(): pass")
+    result = pytester.runpytest_subprocess()
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*UserWarning: conftest configure warning*"])
+
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings = ignore::UserWarning
+        """
+    )
+    result = pytester.runpytest_subprocess()
+    assert result.ret == 0
+    result.stderr.no_fnmatch_line("*conftest configure warning*")
+
+
 class TestProgName:
     """Test program name display in help and error messages (issue #1764)."""
 
