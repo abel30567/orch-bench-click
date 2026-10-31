@@ -1,0 +1,1 @@
+Fixed assertion rewriting reusing a stale cached ``.pyc`` when a test file was modified quickly enough to keep the same modification time and size -- the rewritten ``.pyc`` cache is now invalidated based on a hash of the source (:pep:`552`).
