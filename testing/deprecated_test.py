@@ -1,6 +1,8 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import warnings
+
 from _pytest import deprecated
 from _pytest.pytester import Pytester
 from _pytest.scope import Scope
@@ -364,3 +366,53 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+@pytest.mark.parametrize("type_expr", ['"string"', "str", "int | str"])
+def test_ini_options_non_string_value_for_string_option_is_deprecated(
+    pytester: Pytester, type_expr: str
+) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        string_option = ["a", "b"]
+        """
+    )
+    pytester.makeconftest(
+        f"""
+        def pytest_addoption(parser):
+            parser.addini("string_option", "", type={type_expr}, default="")
+        """
+    )
+    config = pytester.parseconfig()
+    with pytest.warns(
+        pytest.PytestRemovedIn10Warning,
+        match=r"^Passing a value that is not a string to a 'string'-typed ini option",
+    ) as record:
+        assert config.getini("string_option") == ["a", "b"]
+    assert len(record) == 1
+    assert "config option 'string_option' expects a string, got list" in str(
+        record[0].message
+    )
+    assert record[0].filename == __file__
+
+
+def test_ini_options_string_value_for_string_option_not_deprecated(
+    pytester: Pytester,
+) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        string_option = "a b"
+        """
+    )
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("string_option", "", type="string")
+        """
+    )
+    config = pytester.parseconfig()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert config.getini("string_option") == "a b"
