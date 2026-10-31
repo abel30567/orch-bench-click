@@ -502,3 +502,50 @@ def test_ini_string_option_non_string_value_runtime_capture(
     result = pytester.runpytest()
     result.assert_outcomes(passed=3)
     result.stdout.no_fnmatch_line("*warnings summary*")
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "def pytest_report_header(config):\n"
+        "    return f\"s_opt={config.getini('s_opt')}\"",
+        "def pytest_sessionstart(session):\n    session.config.getini('s_opt')",
+    ],
+    ids=["report_header", "sessionstart"],
+)
+@pytest.mark.parametrize("error", [False, True], ids=["default", "error_filter"])
+def test_ini_string_option_non_string_value_sessionstart_hooks(
+    pytester: Pytester, hook: str, error: bool
+) -> None:
+    """Hooks after pytest_configure but outside any warnings-capture block
+    still report the warning in the summary, or as a UsageError (#F5)."""
+    pytester.makeconftest(
+        "def pytest_addoption(parser):\n"
+        "    parser.addini('s_opt', '', type='string')\n" + hook + "\n"
+    )
+    filters = 'filterwarnings = ["error"]' if error else ""
+    pytester.makepyprojecttoml(
+        f"""
+        [tool.pytest.ini_options]
+        s_opt = ["a", "b"]
+        {filters}
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest()
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
+    if error:
+        assert result.ret == pytest.ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            ["ERROR: Passing a value that is not a string to a 'string'-typed*"]
+        )
+    else:
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*= warnings summary =*",
+                "*conftest.py:*",
+                "*PytestRemovedIn10Warning: Passing a value that is not a string*",
+            ]
+        )
+        result.stderr.no_fnmatch_line("*PytestRemovedIn10Warning*")

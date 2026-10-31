@@ -1168,9 +1168,9 @@ class Config:
         self.trace = self.pluginmanager.trace.root.get("config")
         self.hook = self.pluginmanager.hook
         self._inicache: dict[str, Any] = {}
-        # Set once pytest_configure has run; warnings after that point are
-        # issued normally so the regular warning capture applies.
-        self._configure_done = False
+        # Number of active ``catch_warnings_for_item`` blocks (warnings plugin).
+        # While > 0, warnings can be issued normally and will be captured.
+        self._warnings_capture_depth = 0
         self._inicfg: ConfigDict = {}
         self._cleanup_stack = contextlib.ExitStack()
         self.pluginmanager.register(self, "pytestconfig")
@@ -1278,13 +1278,11 @@ class Config:
                 stack.enter_context(self._catch_configured_warnings(record=False))
                 self.add_cleanup(stack.pop_all().close)
         self.hook.pytest_configure.call_historic(kwargs=dict(config=self))
-        self._configure_done = True
 
     def _ensure_unconfigure(self) -> None:
         try:
             if self._configured:
                 self._configured = False
-                self._configure_done = False
                 try:
                     self.hook.pytest_unconfigure(config=self)
                 finally:
@@ -1960,13 +1958,19 @@ class Config:
                 warning = _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
                     inipath=self.inipath, name=name, value=value
                 )
-                if self._configure_done:
-                    # Runtime (tests, fixtures, hooks): warn normally so
-                    # pytest.warns, recwarn and filterwarnings marks apply.
+                if self._warnings_capture_depth or self.pluginmanager.is_blocked(
+                    "warnings"
+                ):
+                    # Inside a warnings-capture block (collection, tests,
+                    # sessionfinish, ...) or with the warnings plugin disabled:
+                    # warn normally so pytest.warns, recwarn and filterwarnings
+                    # marks apply.
                     # Frames: _getini_ini <- _getini_value <- _getini <-
                     # getini <- caller of getini().
                     warnings.warn(warning, stacklevel=5)
                 else:
+                    # Outside any capture block (configure, sessionstart,
+                    # report_header, ...): record it as a config-time warning.
                     try:
                         # One extra frame for issue_config_time_warning.
                         self.issue_config_time_warning(warning, stacklevel=6)
