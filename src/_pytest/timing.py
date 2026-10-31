@@ -64,6 +64,17 @@ class Duration:
         return self.stop.perf_count - self.start.perf_count
 
 
+def _unmeasured_instant() -> Instant:
+    instant = Instant()
+    object.__setattr__(instant, "time", 0.0)
+    object.__setattr__(instant, "perf_count", 0.0)
+    return instant
+
+
+#: A `Duration` for a call whose timing was not measured: zero timestamps and zero seconds.
+UNMEASURED = Duration(start=_unmeasured_instant(), stop=_unmeasured_instant())
+
+
 @dataclasses.dataclass
 class MockTiming:
     """Mocks _pytest.timing with a known object that can be used to control timing in tests

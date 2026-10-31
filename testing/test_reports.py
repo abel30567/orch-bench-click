@@ -603,3 +603,42 @@ class TestHooks:
             _ = pytestconfig.hook.pytest_report_from_serializable(
                 config=pytestconfig, data=data
             )
+
+
+def test_subtest_timing_unaffected_by_mocked_time(pytester: Pytester) -> None:
+    """Mocking ``time`` inside a subtest must not affect its reported timing (#15298)."""
+    pytester.makepyfile(
+        """
+        import time
+
+        def test_with_subtest(subtests, monkeypatch):
+            real_sleep = time.sleep
+            with subtests.test(msg="frozen clock"):
+                monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                monkeypatch.setattr("time.time", lambda: 0.0)
+                real_sleep(0.1)
+        """
+    )
+    reprec = pytester.inline_run()
+    reports = [
+        rep
+        for rep in reprec.getreports("pytest_runtest_logreport")
+        if rep.when == "call" and getattr(rep, "context", None) is not None
+    ]
+    assert len(reports) == 1
+    (rep,) = reports
+    assert rep.passed
+    assert rep.duration >= 0.1
+    assert rep.start > 0
+    assert rep.stop >= rep.start
+
+
+def test_callinfo_timing_from_duration() -> None:
+    from _pytest import timing
+    from _pytest.runner import CallInfo
+
+    call = CallInfo[None](None, None, timing.UNMEASURED, "call", _ispytest=True)
+    assert (call.start, call.stop, call.duration) == (0.0, 0.0, 0.0)
+
+    call.start, call.stop, call.duration = 1.0, 3.0, 2.0
+    assert (call.start, call.stop, call.duration) == (1.0, 3.0, 2.0)
