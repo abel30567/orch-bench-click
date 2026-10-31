@@ -166,7 +166,15 @@ def deindent(lines: Iterable[str]) -> list[str]:
     return textwrap.dedent("\n".join(lines)).splitlines()
 
 
-def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None]:
+def _statement_linenos(node: ast.AST) -> list[int]:
+    """Return the sorted statement line numbers (0-based) of the AST node.
+
+    The result is memoized on the node, because the same AST is queried once
+    per traceback entry when formatting an exception. It must not be modified.
+    """
+    cached: list[int] | None = getattr(node, "_pytest_statement_linenos", None)
+    if cached is not None:
+        return cached
     # Flatten all statements and except handlers into one lineno-list.
     # AST's line numbers start indexing at 1.
     values: list[int] = []
@@ -183,6 +191,12 @@ def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None
                     # Treat the finally/orelse part as its own statement.
                     values.append(val[0].lineno - 1 - 1)
     values.sort()
+    setattr(node, "_pytest_statement_linenos", values)
+    return values
+
+
+def get_statement_startend2(lineno: int, node: ast.AST) -> tuple[int, int | None]:
+    values = _statement_linenos(node)
     insert_index = bisect_right(values, lineno)
     if insert_index == 0:
         return 0, None

@@ -524,6 +524,7 @@ def importtestmodule(
 ):
     # We assume we are only called once per module.
     importmode = config.getoption("--import-mode")
+    tbfilter = not config.getoption("fulltrace", False)
     try:
         mod = import_path(
             path,
@@ -533,7 +534,7 @@ def importtestmodule(
         )
     except SyntaxError as e:
         raise nodes.Collector.CollectError(
-            ExceptionInfo.from_current().getrepr(style="short")
+            ExceptionInfo.from_current().getrepr(style="short", tbfilter=tbfilter)
         ) from e
     except ImportPathMismatchError as e:
         raise nodes.Collector.CollectError(
@@ -550,7 +551,7 @@ def importtestmodule(
         if config.get_verbosity() < 2:
             exc_info.traceback = exc_info.traceback.filter(filter_traceback)
         exc_repr = (
-            exc_info.getrepr(style="short")
+            exc_info.getrepr(style="short", tbfilter=tbfilter)
             if exc_info.traceback
             else exc_info.exconly()
         )

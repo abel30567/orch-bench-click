@@ -1,0 +1,1 @@
+Reporting a :class:`RecursionError` whose origin cannot be located is now much faster: only the first and last 10 stack frames are shown, unless ``--full-trace`` is passed, which shows all of them.

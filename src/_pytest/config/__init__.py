@@ -137,6 +137,8 @@ class ConftestImportFailure(Exception):
     ) -> None:
         self.path = path
         self.cause = cause
+        #: Whether all frames were requested (``--full-trace``).
+        self.fulltrace = False
 
     def __str__(self) -> str:
         return f"{type(self.cause).__name__}: {self.cause} (from {self.path})"
@@ -161,7 +163,7 @@ def print_conftest_import_error(e: ConftestImportFailure, file: TextIO) -> None:
         filter_traceback_for_conftest_import_failure
     )
     exc_repr = (
-        exc_info.getrepr(style="short", chain=False)
+        exc_info.getrepr(style="short", chain=False, tbfilter=not e.fulltrace)
         if exc_info.traceback
         else exc_info.exconly()
     )
@@ -1329,12 +1331,13 @@ class Config:
         excinfo: ExceptionInfo[BaseException],
         option: argparse.Namespace | None = None,
     ) -> None:
-        if option and getattr(option, "fulltrace", False):
-            style: TracebackStyle = "long"
-        else:
-            style = "native"
+        fulltrace = bool(option and getattr(option, "fulltrace", False))
+        style: TracebackStyle = "long" if fulltrace else "native"
         excrepr = excinfo.getrepr(
-            funcargs=True, showlocals=getattr(option, "showlocals", False), style=style
+            funcargs=True,
+            showlocals=getattr(option, "showlocals", False),
+            style=style,
+            tbfilter=not fulltrace,
         )
         res = self.hook.pytest_internalerror(excrepr=excrepr, excinfo=excinfo)
         if not any(res):
@@ -1700,6 +1703,7 @@ class Config:
                     stacklevel=2,
                 )
             else:
+                e.fulltrace = getattr(self.known_args_namespace, "fulltrace", False)
                 raise
 
         try:
