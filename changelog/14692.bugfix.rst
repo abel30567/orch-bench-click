@@ -1,0 +1,1 @@
+``truncation_limit_lines`` and ``truncation_limit_chars`` now accept integer values in native TOML configuration (``[pytest]`` in ``pytest.toml`` or ``[tool.pytest]`` in ``pyproject.toml``); string values remain accepted for backward compatibility.

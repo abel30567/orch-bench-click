@@ -1162,7 +1162,65 @@ class TestConfigAPI:
         config = pytester.parseconfig()
         assert config.getini("ini_param") == 7
 
-    @pytest.mark.parametrize("bad_type", ["integer", dict, int | dict])
+    @pytest.mark.parametrize(
+        "section, lines, chars",
+        [
+            ("[tool.pytest]", "3", "50"),
+            ("[tool.pytest]", '"3"', '"50"'),
+            ("[tool.pytest.ini_options]", "3", "50"),
+            ("[tool.pytest.ini_options]", '"3"', '"50"'),
+        ],
+        ids=["native-int", "native-str", "ini-options-int", "ini-options-str"],
+    )
+    def test_truncation_limits_accept_int_and_str(
+        self,
+        pytester: Pytester,
+        monkeypatch: MonkeyPatch,
+        section: str,
+        lines: str,
+        chars: str,
+    ) -> None:
+        """truncation_limit_lines/chars accept native TOML ints as well as strings (#14692)."""
+        from _pytest.assertion.truncate import _get_truncation_parameters
+
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("BUILD_NUMBER", raising=False)
+        pytester.makepyprojecttoml(
+            f"""
+            {section}
+            truncation_limit_lines = {lines}
+            truncation_limit_chars = {chars}
+            """
+        )
+        config = pytester.parseconfig()
+        should_truncate, budget = _get_truncation_parameters(config)
+        assert should_truncate
+        assert (budget.max_lines, budget.max_chars) == (3, 50)
+
+    def test_truncation_limits_native_int_zero_disables(
+        self, pytester: Pytester, monkeypatch: MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("BUILD_NUMBER", raising=False)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            truncation_limit_lines = 0
+            truncation_limit_chars = 0
+            """
+        )
+        pytester.makepyfile(
+            """
+            def test_failure():
+                assert list(range(100)) == list(range(1, 101))
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(failed=1)
+        result.stdout.no_fnmatch_line("*TypeError*")
+        result.stdout.no_fnmatch_line("*truncated*")
+
+    @pytest.mark.parametrize("bad_type",["integer", dict, int | dict])
     def test_addini_invalid_type(self, bad_type: object) -> None:
         parser = Parser(_ispytest=True)
         with pytest.raises(ValueError, match="invalid type for ini option 'ini_param'"):
