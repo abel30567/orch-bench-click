@@ -13,6 +13,7 @@ from typing import Any
 from typing import Literal
 
 import _pytest._code
+from _pytest.assertion.truncate import _get_truncation_parameters
 from _pytest.config import _get_plugin_specs_as_list
 from _pytest.config import _get_prog_name
 from _pytest.config import _iter_rewritable_modules
@@ -3252,6 +3253,66 @@ class TestNativeTomlConfig:
 
         with pytest.raises(TypeError, match=r"expects a string.*got int"):
             config.getini("string_not_string")
+
+    @pytest.mark.parametrize(
+        "lines, chars",
+        [("3", "90"), ('"3"', '"90"')],
+        ids=["int", "str"],
+    )
+    @pytest.mark.parametrize("section", ["[tool.pytest]", "[tool.pytest.ini_options]"])
+    def test_truncation_limits(
+        self, pytester: Pytester, section: str, lines: str, chars: str
+    ) -> None:
+        pytester.makepyprojecttoml(
+            f"""
+            {section}
+            truncation_limit_lines = {lines}
+            truncation_limit_chars = {chars}
+            """
+        )
+        config = pytester.parseconfig()
+
+        _, budget = _get_truncation_parameters(config)
+
+        assert (budget.max_lines, budget.max_chars) == (3, 90)
+
+    def test_truncation_limit_int_end_to_end(self, pytester: Pytester) -> None:
+        pytester.makefile(
+            ".toml",
+            pytest="""
+            [pytest]
+            truncation_limit_lines = 0
+            truncation_limit_chars = 0
+            """,
+        )
+        pytester.makepyfile(
+            """
+            def test_failure():
+                assert {1: 2} == {3: 4}
+            """
+        )
+
+        result = pytester.runpytest()
+
+        result.assert_outcomes(failed=1)
+        result.stdout.fnmatch_lines(["*Left contains 1 more item*"])
+        result.stdout.no_fnmatch_line("*TypeError*")
+        result.stdout.no_fnmatch_line("*truncated*")
+
+    @pytest.mark.parametrize(
+        "name", ["truncation_limit_lines", "truncation_limit_chars"]
+    )
+    def test_truncation_limit_rejects_bool(self, pytester: Pytester, name: str) -> None:
+        pytester.makepyprojecttoml(
+            f"""
+            [tool.pytest]
+            {name} = true
+            """
+        )
+        config = pytester.parseconfig()
+
+        with pytest.raises(TypeError, match=r"expects one of int \| string.*got bool"):
+            config.getini(name)
 
 
 class TestInicfgDeprecation:
