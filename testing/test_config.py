@@ -1145,6 +1145,45 @@ class TestConfigAPI:
         ):
             _ = config.getini("ini_param")
 
+    @pytest.mark.parametrize(
+        "section, lines, chars, expect_truncated",
+        [
+            ("[tool.pytest]", "0", "0", False),
+            ("[tool.pytest]", "1", "0", True),
+            ("[tool.pytest]", '"0"', '"0"', False),
+            ("[tool.pytest]", '"1"', '"0"', True),
+            ("[tool.pytest.ini_options]", "0", "0", False),
+            ("[tool.pytest.ini_options]", '"1"', '"0"', True),
+        ],
+    )
+    def test_truncation_limits_int_or_str(
+        self,
+        pytester: Pytester,
+        monkeypatch: MonkeyPatch,
+        section: str,
+        lines: str,
+        chars: str,
+        expect_truncated: bool,
+    ) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("BUILD_NUMBER", raising=False)
+        pytester.makepyprojecttoml(
+            f"""
+            {section}
+            truncation_limit_lines = {lines}
+            truncation_limit_chars = {chars}
+            """
+        )
+        pytester.makepyfile(
+            """
+            def test_failure():
+                assert {i: i for i in range(50)} == {i: i + 1 for i in range(50)}
+            """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(failed=1)
+        assert ("Full output truncated" in result.stdout.str()) is expect_truncated
+
     def test_addini_plain_type(self, pytester: Pytester) -> None:
         """A plain Python type is accepted as an alias of its string tag."""
         pytester.makeconftest(
