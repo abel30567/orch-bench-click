@@ -10,6 +10,7 @@ from _pytest.config import Config
 from _pytest.pytester import Pytester
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
+from _pytest.subtests import SubtestReport
 import pytest
 
 
@@ -454,6 +455,33 @@ class TestReportSerialization:
             data = report._to_json()
             loaded_report = TestReport._from_json(data)
             assert loaded_report.stop - loaded_report.start == approx(report.duration)
+
+    def test_subtest_timing_unaffected_by_mocked_time(
+        self, pytester: Pytester
+    ) -> None:
+        """Mocking the "time" module inside a subtest does not affect its timing (#15298)."""
+        reprec = pytester.inline_runsource(
+            """
+            import time
+
+            def test_1(subtests, monkeypatch):
+                real_sleep = time.sleep
+                with subtests.test(msg="frozen clock"):
+                    monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                    monkeypatch.setattr("time.time", lambda: 0.0)
+                    real_sleep(0.1)
+        """
+        )
+        reports = [
+            x
+            for x in reprec.getreports("pytest_runtest_logreport")
+            if isinstance(x, SubtestReport)
+        ]
+        assert len(reports) == 1
+        report = reports[0]
+        assert report.duration >= 0.1
+        assert report.stop > 0.0
+        assert report.stop - report.start == approx(report.duration, abs=0.05)
 
     @pytest.mark.parametrize(
         "first_skip_reason, second_skip_reason, skip_reason_output",

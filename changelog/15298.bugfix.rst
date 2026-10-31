@@ -1,0 +1,1 @@
+Fixed subtests reporting negative durations and a stop timestamp of ``0.0`` when the test mocks ``time.perf_counter`` or ``time.time``, e.g. via freezegun or time-machine.
