@@ -36,6 +36,7 @@ from typing import Final
 from typing import final
 from typing import IO
 from typing import Literal
+from typing import NamedTuple
 from typing import TextIO
 from typing import TYPE_CHECKING
 import warnings
@@ -1044,6 +1045,13 @@ class _DeprecatedInicfgProxy(MutableMapping[str, Any]):
         return len(self._config._inicfg)
 
 
+class RegisteredMarker(NamedTuple):
+    """A marker registered through the ``markers`` configuration option."""
+
+    #: The name of the marker.
+    name: str
+
+
 @final
 class Config:
     """Access to configuration values, pluginmanager and plugin hooks.
@@ -1555,6 +1563,15 @@ class Config:
             raise UsageError(
                 "Missing required plugins: {}".format(", ".join(missing_plugins)),
             )
+
+    def _iter_registered_markers(self) -> Iterator[RegisteredMarker]:
+        """Yield the markers registered through the ``markers`` ini option."""
+        for line in self.getini("markers"):
+            # example lines: "skipif(condition): skip the given test if..."
+            # or "hypothesis: tests which use Hypothesis", so to get the
+            # marker name we split on both `:` and `(`.
+            name = line.split(":")[0].split("(")[0].strip()
+            yield RegisteredMarker(name)
 
     def _warn_or_fail_if_strict(self, message: str) -> None:
         strict_config = self.getini("strict_config")

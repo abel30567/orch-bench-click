@@ -2797,3 +2797,73 @@ def test_strict_parametrization_ids_with_hidden_param(pytester: Pytester) -> Non
             "Duplicates:     a",
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("expr", "expected"),
+    [
+        ("", frozenset()),
+        ("foo", frozenset({"foo"})),
+        ("foo and not (bar or baz)", frozenset({"foo", "bar", "baz"})),
+        ("foo(a=1, b='x') or bar(c=True)", frozenset({"foo", "bar"})),
+        ("True or None", frozenset({"True", "None"})),
+    ],
+)
+def test_expression_idents(expr: str, expected: frozenset[str]) -> None:
+    from _pytest.mark.expression import Expression
+
+    assert Expression.compile(expr).idents() == expected
+
+
+@pytest.mark.parametrize("option", ["--strict-markers", "--strict"])
+def test_strict_markers_unknown_mark_expression(
+    pytester: Pytester, option: str
+) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        markers =
+            registered: a registered marker
+            withargs(x): a marker with args
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.registered
+        def test_one():
+            pass
+        """
+    )
+    result = pytester.runpytest(
+        option, "-m", "registered or withargs(x=1) or skip or typo2 or typo1"
+    )
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Unknown marker(s) in '-m' expression: typo1, typo2"]
+    )
+
+    result = pytester.runpytest(option, "-m", "registered or withargs(x=1) or skip")
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=1)
+
+
+def test_unknown_mark_expression_not_strict(pytester: Pytester) -> None:
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest("-m", "typo")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
+    result.stdout.fnmatch_lines(["*1 deselected*"])
+
+
+def test_strict_markers_ini_overrides_strict(pytester: Pytester) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        strict = true
+        strict_markers = false
+        """
+    )
+    pytester.makepyfile("def test_one(): pass")
+    result = pytester.runpytest("-m", "typo")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
