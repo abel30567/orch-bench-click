@@ -314,12 +314,18 @@ class Expression:
     The expression can be evaluated against different matchers.
     """
 
-    __slots__ = ("_code", "input")
+    __slots__ = ("_code", "_idents", "input")
 
-    def __init__(self, input: str, code: types.CodeType) -> None:
+    def __init__(
+        self,
+        input: str,
+        code: types.CodeType,
+        idents: frozenset[str] = frozenset(),
+    ) -> None:
         #: The original input line, as a string.
         self.input: Final = input
         self._code: Final = code
+        self._idents: Final = idents
 
     @classmethod
     def compile(cls, input: str) -> Expression:
@@ -335,7 +341,19 @@ class Expression:
             filename="<pytest match expression>",
             mode="eval",
         )
-        return Expression(input, code)
+        idents = frozenset(
+            node.id[len(IDENT_PREFIX) :]
+            for node in ast.walk(astexpr)
+            if isinstance(node, ast.Name)
+        )
+        return Expression(input, code, idents)
+
+    def idents(self) -> frozenset[str]:
+        """Return the identifiers (e.g. marker names) used in the expression.
+
+        Keyword argument names are not included.
+        """
+        return self._idents
 
     def evaluate(self, matcher: ExpressionMatcher) -> bool:
         """Evaluate the match expression.
