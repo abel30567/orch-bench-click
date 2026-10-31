@@ -141,6 +141,12 @@ CALLSPEC2_RENAMED = PytestRemovedIn10Warning(
     "See https://docs.pytest.org/en/stable/deprecations.html#callspec2-renamed"
 )
 
+INI_STRING_NON_STR = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    "Passing a value that is not a string to a 'string'-typed ini option is deprecated "
+    "and will become an error in pytest 10: {name} = {value!r}",
+)
+
 
 def check_ispytest(ispytest: bool) -> None:
     if not ispytest:
