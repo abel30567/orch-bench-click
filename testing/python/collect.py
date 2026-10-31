@@ -1748,3 +1748,90 @@ def test_collection_hierarchy(pytester: Pytester) -> None:
         ],
         consecutive=True,
     )
+
+
+def test_fixture_wrapped_in_decorators_warns(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import functools
+        import pytest
+
+        def deco(f):
+            @functools.wraps(f)
+            def w(*a, **k):
+                return f(*a, **k)
+            return w
+
+        @deco
+        @pytest.fixture
+        def wrapped():
+            return 1
+
+        class TestA:
+            @classmethod
+            @pytest.fixture
+            def cm(cls):
+                return 2
+
+            @staticmethod
+            @pytest.fixture
+            def sm():
+                return 3
+
+            @pytest.fixture
+            @classmethod
+            def cm2(cls):
+                return 4
+
+            @pytest.fixture
+            @staticmethod
+            def sm2():
+                return 5
+
+            def test_ok(self, sm, cm2, sm2):
+                assert (sm, cm2, sm2) == (3, 4, 5)
+
+            def test_cm(self, cm):
+                pass
+
+        def test_wrapped(wrapped):
+            pass
+        """
+    )
+    result = pytester.runpytest("-W", "default")
+    result.assert_outcomes(passed=1, errors=2, warnings=3)
+    result.stdout.fnmatch_lines_random(
+        [
+            "*cannot discover fixture 'wrapped' due to being wrapped in decorators",
+            "*cannot discover fixture 'cm' because it is wrapped by @classmethod;"
+            " place @pytest.fixture above @classmethod",
+            "*fixture 'sm' is wrapped by @staticmethod above @pytest.fixture;"
+            " place @pytest.fixture above @staticmethod",
+            "*fixture 'cm' not found",
+            "*fixture 'wrapped' not found",
+        ]
+    )
+
+
+def test_fixture_function_definition_subclass(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+        from _pytest.fixtures import FixtureFunctionDefinition
+
+        class MyDef(FixtureFunctionDefinition):
+            pass
+
+        def make():
+            fd = pytest.fixture(lambda: 42)
+            fd.__class__ = MyDef
+            return fd
+
+        answer = make()
+        answer.name = "answer"
+
+        def test_it(answer):
+            assert answer == 42
+        """
+    )
+    pytester.runpytest().assert_outcomes(passed=1)
