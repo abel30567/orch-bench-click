@@ -1166,11 +1166,15 @@ class ExceptionInfoFormatter:
         exception (for example comparing numpy arrays using equality raises a
         TypeError), in which case we do our best to warn the user of the
         error and show a limited traceback.
+
+        If the origin cannot be located (for example because the locals change
+        on each call), also show a limited traceback, as formatting all of the
+        frames is slow, unless all frames were requested (``tbfilter=False``).
         """
+        max_frames = 10
         try:
             recursionindex = traceback.recursionindex()
         except Exception as e:
-            max_frames = 10
             extraline: str | None = (
                 "!!! Recursion error detected, but an error occurred locating the origin of recursion.\n"
                 "  The following exception happened when comparing locals in the stack frame:\n"
@@ -1184,6 +1188,15 @@ class ExceptionInfoFormatter:
             if recursionindex is not None:
                 extraline = "!!! Recursion detected (same locals & position)"
                 traceback = traceback[: recursionindex + 1]
+            elif self.tbfilter is not False and len(traceback) > 2 * max_frames:
+                extraline = (
+                    "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+                    f"  Displaying first and last {max_frames} stack frames out of {len(traceback)}.\n"
+                    "  Pass `--full-trace` to see all frames."
+                )
+                # Type ignored because adding two instances of a List subtype
+                # currently incorrectly has type List instead of the subtype.
+                traceback = traceback[:max_frames] + traceback[-max_frames:]  # type: ignore
             else:
                 extraline = None
 

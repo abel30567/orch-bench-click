@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from types import FrameType
@@ -11,7 +12,12 @@ from _pytest._code import ExceptionInfo
 from _pytest._code import Frame
 from _pytest._code import Source
 from _pytest._code.code import ExceptionChainRepr
+from _pytest._code.code import ExceptionInfoFormatter
 from _pytest._code.code import ReprFuncArgs
+from _pytest._code.code import Traceback
+from _pytest._code.source import _statement_linenos
+from _pytest._code.source import get_statement_startend2
+from _pytest.pytester import Pytester
 import pytest
 
 
@@ -195,6 +201,90 @@ class TestTracebackEntry:
         pattern = r"  File '.*test_code.py':\d+ in test_tb_entry_str\n  assert False"
         entry = str(exci.traceback[0])
         assert re.match(pattern, entry)
+
+
+def _recurse_with_changing_locals(remaining: int) -> None:
+    if remaining == 0:
+        raise RecursionError("too deep")
+    _recurse_with_changing_locals(remaining - 1)
+
+
+class TestTruncateRecursiveTraceback:
+    @staticmethod
+    def traceback_with_entries(n: int) -> Traceback:
+        with pytest.raises(RecursionError) as excinfo:
+            # This test function's frame adds one entry, the helper the others.
+            _recurse_with_changing_locals(n - 2)
+        assert len(excinfo.traceback) == n
+        return excinfo.traceback
+
+    def test_origin_not_located(self) -> None:
+        traceback = self.traceback_with_entries(50)
+
+        result, extraline = ExceptionInfoFormatter()._truncate_recursive_traceback(
+            traceback
+        )
+
+        assert list(result) == list(traceback[:10]) + list(traceback[-10:])
+        assert extraline == (
+            "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+            "  Displaying first and last 10 stack frames out of 50.\n"
+            "  Pass `--full-trace` to see all frames."
+        )
+
+    @pytest.mark.parametrize(
+        ("n", "tbfilter"), [(20, True), (50, False)], ids=["few-frames", "no-tbfilter"]
+    )
+    def test_not_truncated(self, n: int, tbfilter: bool) -> None:
+        traceback = self.traceback_with_entries(n)
+
+        formatter = ExceptionInfoFormatter(tbfilter=tbfilter)
+        result, extraline = formatter._truncate_recursive_traceback(traceback)
+
+        assert result == traceback
+        assert extraline is None
+
+    def test_callable_tbfilter_is_truncated(self) -> None:
+        traceback = self.traceback_with_entries(21)
+
+        formatter = ExceptionInfoFormatter(tbfilter=lambda excinfo: excinfo.traceback)
+        result, extraline = formatter._truncate_recursive_traceback(traceback)
+
+        assert len(result) == 20
+        assert extraline is not None
+
+    def test_terminal_output(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            def f(x):
+                f(x + 1)
+
+            def test_recursion():
+                f(0)
+            """
+        )
+
+        result = pytester.runpytest()
+        result.stdout.fnmatch_lines(
+            [
+                "*!!! Recursion error detected, but the origin of the recursion could not be located.",
+                "*  Displaying first and last 10 stack frames out of *.",
+                "*  Pass `--full-trace` to see all frames.",
+            ]
+        )
+
+        result = pytester.runpytest("--full-trace")
+        result.stdout.no_fnmatch_line("*origin of the recursion could not be located*")
+
+
+def test_statement_linenos_memoized() -> None:
+    node = ast.parse("@dec\ndef f():\n    x = 1\n\ny = 2\n")
+
+    linenos = _statement_linenos(node)
+
+    assert linenos == [0, 1, 2, 4]
+    assert _statement_linenos(node) is linenos
+    assert get_statement_startend2(2, node) == (2, 4)
 
 
 class TestReprFuncArgs:
