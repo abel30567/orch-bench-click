@@ -1184,6 +1184,15 @@ class ExceptionInfoFormatter:
             if recursionindex is not None:
                 extraline = "!!! Recursion detected (same locals & position)"
                 traceback = traceback[: recursionindex + 1]
+            elif self.tbfilter is not False and len(traceback) > 20:
+                # Rendering thousands of frames is very slow, so truncate.
+                max_frames = 10
+                extraline = (
+                    "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+                    f"  Displaying first and last {max_frames} stack frames out of {len(traceback)}.\n"
+                    "  Pass `--full-trace` to see all frames."
+                )
+                traceback = traceback[:max_frames] + traceback[-max_frames:]  # type: ignore
             else:
                 extraline = None
 
