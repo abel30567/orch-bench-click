@@ -143,6 +143,10 @@ def pytest_addoption(parser: Parser) -> None:
     )
     parser.addini(
         "max_warnings",
+        # ``int | str`` (not plain ``int``) for backward compatibility: quoted
+        # TOML values and empty values have always been accepted.
+        type=int | str,
+        default=None,
         help="Exit with error if all tests pass but the number of warnings exceeds this threshold",
     )
 

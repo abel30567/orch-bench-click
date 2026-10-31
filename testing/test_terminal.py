@@ -2073,6 +2073,104 @@ def test_skip_counting_towards_summary(tr):
     assert res == ([("1 failed", {"bold": True, "red": True})], "red")
 
 
+@pytest.mark.filterwarnings("default::UserWarning")
+class TestMaxWarningsConfig:
+    """The max_warnings option accepts native TOML integers and strings."""
+
+    @pytest.fixture(autouse=True)
+    def warning_test(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import warnings
+
+            def test_warning():
+                warnings.warn(UserWarning("example warning"))
+            """
+        )
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            pytest.param("0", ExitCode.MAX_WARNINGS_ERROR, id="toml-int-zero"),
+            pytest.param("1", ExitCode.OK, id="toml-int-at-limit"),
+            pytest.param('"0"', ExitCode.MAX_WARNINGS_ERROR, id="toml-str-zero"),
+            pytest.param('"1"', ExitCode.OK, id="toml-str-at-limit"),
+            pytest.param('""', ExitCode.OK, id="toml-str-empty"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "filename, section",
+        [("pytest.toml", "[pytest]"), ("pyproject.toml", "[tool.pytest]")],
+    )
+    def test_toml(
+        self,
+        pytester: Pytester,
+        filename: str,
+        section: str,
+        value: str,
+        expected: ExitCode,
+    ) -> None:
+        pytester.path.joinpath(filename).write_text(
+            f"{section}\nmax_warnings = {value}\n", encoding="utf-8"
+        )
+        result = pytester.runpytest()
+        assert result.ret == expected
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            pytest.param("0", ExitCode.MAX_WARNINGS_ERROR, id="zero"),
+            pytest.param("1", ExitCode.OK, id="at-limit"),
+            pytest.param("", ExitCode.OK, id="empty"),
+        ],
+    )
+    def test_ini(self, pytester: Pytester, value: str, expected: ExitCode) -> None:
+        pytester.makeini(f"[pytest]\nmax_warnings = {value}\n")
+        result = pytester.runpytest()
+        assert result.ret == expected
+
+    def test_unset(self, pytester: Pytester) -> None:
+        result = pytester.runpytest()
+        assert result.ret == ExitCode.OK
+
+    def test_threshold_exceeded_message(self, pytester: Pytester) -> None:
+        pytester.maketoml("[pytest]\nmax_warnings = 0\n")
+        result = pytester.runpytest("-qq", "--disable-warnings")
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+        result.stdout.fnmatch_lines(
+            ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
+        )
+
+    @pytest.mark.parametrize(
+        "override, expected",
+        [
+            pytest.param("0", ExitCode.MAX_WARNINGS_ERROR, id="zero"),
+            pytest.param("1", ExitCode.OK, id="at-limit"),
+            pytest.param("", ExitCode.OK, id="empty"),
+        ],
+    )
+    def test_override_ini(
+        self, pytester: Pytester, override: str, expected: ExitCode
+    ) -> None:
+        pytester.maketoml("[pytest]\nmax_warnings = 5\n")
+        result = pytester.runpytest("-o", f"max_warnings={override}")
+        assert result.ret == expected
+
+    def test_cli_option_takes_precedence(self, pytester: Pytester) -> None:
+        pytester.maketoml("[pytest]\nmax_warnings = 0\n")
+        result = pytester.runpytest("--max-warnings=1")
+        assert result.ret == ExitCode.OK
+
+    @pytest.mark.parametrize("value", ["true", "1.5"])
+    def test_invalid_toml_type(self, pytester: Pytester, value: str) -> None:
+        pytester.maketoml(f"[pytest]\nmax_warnings = {value}\n")
+        result = pytester.runpytest()
+        assert result.ret == ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            ["*config option 'max_warnings' expects one of int | string, got *"]
+        )
+
+
 class TestClassicOutputStyle:
     """Ensure classic output style works as expected (#3883)"""
 
