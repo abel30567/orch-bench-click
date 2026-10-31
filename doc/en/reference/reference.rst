@@ -2478,6 +2478,7 @@ passed multiple times. The expected format is ``name=value``. For example::
     :default: ``false``
 
     If set to ``true``, markers not registered in the ``markers`` section of the configuration file will raise errors.
+    This applies both to markers applied to tests and to markers used in ``-m`` expressions.
 
     .. tab:: toml
 
