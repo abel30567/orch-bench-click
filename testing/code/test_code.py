@@ -337,6 +337,25 @@ class TestTruncateRecursiveTraceback:
 
         self.assert_all_frames_shown(pytester.runpytest("--full-trace"))
 
+    def test_full_trace_keyboard_interrupt(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            def f(x):
+                return f(x + 1)
+
+            def test_interrupt():
+                try:
+                    f(0)
+                except RecursionError as e:
+                    raise KeyboardInterrupt from e
+            """
+        )
+
+        result = pytester.runpytest("--full-trace", no_reraise_ctrlc=True)
+
+        assert result.ret == ExitCode.INTERRUPTED
+        self.assert_all_frames_shown(result)
+
 
 def test_recursionindex_ignores_reentered_frame() -> None:
     """A frame re-entered by throwing into a generator is not recursion (#14903)."""
