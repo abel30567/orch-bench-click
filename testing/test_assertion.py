@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import MutableSequence
 import dataclasses
+import os
 import sys
 import textwrap
 from typing import Any
@@ -3090,3 +3091,36 @@ def test_dict_extra_items_preserve_insertion_order(pytester: Pytester) -> None:
             "test_order.py:*: AssertionError",
         ]
     )
+
+
+def test_rewritten_pyc_invalidated_when_mtime_and_size_unchanged(
+    pytester: Pytester,
+) -> None:
+    """A test file modified in quick succession (same mtime and size) must not
+    load the stale rewritten pyc from ``__pycache__``."""
+    p = pytester.makepyfile(
+        """
+        def test_dummy1():
+            def func():
+                pass
+            print(func.__qualname__)
+        """
+    )
+    st = os.stat(p)
+    result = pytester.runpytest("-s")
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*test_dummy1.<locals>.func*"])
+
+    pytester.makepyfile(
+        """
+        def test_dummy2():
+            def func():
+                pass
+            print(func.__qualname__)
+        """
+    )
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert os.stat(p).st_size == st.st_size
+    result = pytester.runpytest("-s")
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*test_dummy2.<locals>.func*"])
