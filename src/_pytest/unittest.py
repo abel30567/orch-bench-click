@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from unittest import TestCase
 
 from _pytest import fixtures
+from _pytest import timing
 import _pytest._code
 from _pytest._code import ExceptionInfo
 from _pytest.compat import assert_never
@@ -444,9 +445,7 @@ class TestCaseFunction(Function):
         call_info = CallInfo[None](
             None,
             exception_info,
-            start=0,
-            stop=0,
-            duration=0,
+            duration=timing.UNMEASURED,
             when="call",
             _ispytest=True,
         )

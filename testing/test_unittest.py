@@ -6,6 +6,8 @@ import sys
 from _pytest.config import ExitCode
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
+from _pytest.subtests import SubtestReport
+from _pytest.timing import MockTiming
 import pytest
 
 
@@ -1741,3 +1743,71 @@ def test_abstract_testcase_is_not_collected(pytester: Pytester) -> None:
     result = pytester.runpytest()
     assert result.ret == ExitCode.OK
     result.assert_outcomes(passed=1)
+
+
+def test_subtest_timing_unaffected_by_mocked_time(pytester: Pytester) -> None:
+    """Subtest timing must not use the mocked functions of the `time` module."""
+    pytester.makepyfile(
+        """
+        import time
+
+        def test_it(subtests, monkeypatch):
+            real_sleep = time.sleep
+            with subtests.test(msg="frozen clock"):
+                monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                monkeypatch.setattr("time.time", lambda: 0.0)
+                real_sleep(0.01)
+        """
+    )
+    reprec = pytester.inline_run()
+    [report] = [
+        rep
+        for rep in reprec.getreports("pytest_runtest_logreport")
+        if isinstance(rep, SubtestReport)
+    ]
+    assert report.duration >= 0.01
+    assert report.stop >= report.start > 0
+
+
+def test_subtest_timing_uses_pytest_timing(
+    pytester: Pytester, mock_timing: MockTiming
+) -> None:
+    pytester.makepyfile(
+        """
+        from _pytest import timing
+
+        def test_it(subtests):
+            with subtests.test():
+                timing.sleep(5)
+        """
+    )
+    start = mock_timing.time()
+    reprec = pytester.inline_run()
+    [report] = [
+        rep
+        for rep in reprec.getreports("pytest_runtest_logreport")
+        if isinstance(rep, SubtestReport)
+    ]
+    assert report.duration == 5
+    assert (report.start, report.stop) == (start, start + 5)
+
+
+def test_unittest_subtest_is_unmeasured(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import unittest
+
+        class T(unittest.TestCase):
+            def test_it(self):
+                with self.subTest(msg="failing"):
+                    self.fail("boom")
+        """
+    )
+    reprec = pytester.inline_run()
+    [report] = [
+        rep
+        for rep in reprec.getreports("pytest_runtest_logreport")
+        if isinstance(rep, SubtestReport)
+    ]
+    assert report.failed
+    assert (report.start, report.stop, report.duration) == (0, 0, 0)
