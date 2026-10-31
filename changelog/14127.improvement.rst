@@ -1,0 +1,1 @@
+When :confval:`strict_markers` (or :confval:`strict`) is enabled, using an unregistered marker in a ``-m`` expression now raises a usage error instead of silently deselecting tests.

@@ -36,6 +36,7 @@ from typing import Final
 from typing import final
 from typing import IO
 from typing import Literal
+from typing import NamedTuple
 from typing import TextIO
 from typing import TYPE_CHECKING
 import warnings
@@ -98,6 +99,13 @@ Ideally this type would be provided by pluggy itself.
 
 hookimpl = HookimplMarker("pytest")
 hookspec = HookspecMarker("pytest")
+
+
+class RegisteredMarker(NamedTuple):
+    """A marker registered through the ``markers`` configuration option."""
+
+    #: The name of the marker, without its signature and description.
+    name: str
 
 
 @final
@@ -1746,6 +1754,14 @@ class Config:
         x = self.getini(name)
         assert isinstance(x, list)
         x.append(line)  # modifies the cached list inline
+
+    def _iter_registered_markers(self) -> Iterator[RegisteredMarker]:
+        """Yield a :class:`RegisteredMarker` for each ``markers`` ini line."""
+        for line in self.getini("markers"):
+            # example lines: "skipif(condition): skip the given test if..."
+            # or "hypothesis: tests which use Hypothesis", so to get the
+            # marker name we split on both `:` and `(`.
+            yield RegisteredMarker(line.split(":")[0].split("(")[0].strip())
 
     def getini(self, name: str) -> Any:
         """Return configuration value the an :ref:`configuration file <configfiles>`.

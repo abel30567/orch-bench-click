@@ -264,6 +264,7 @@ def deselect_by_mark(items: list[Item], config: Config) -> None:
         return
 
     expr = _parse_expression(matchexpr, "Wrong expression passed to '-m'")
+    _validate_marker_names(expr, config)
     remaining: list[Item] = []
     deselected: list[Item] = []
     for item in items:
@@ -283,6 +284,22 @@ def _parse_expression(expr: str, exc_message: str) -> Expression:
         raise UsageError(
             f"{exc_message}: {e.text}: at column {e.offset}: {e.msg}"
         ) from None
+
+
+def _validate_marker_names(expr: Expression, config: Config) -> None:
+    """Raise a :class:`UsageError` if strict markers are enabled and ``expr``
+    uses a marker which is not registered."""
+    strict_markers = config.getini("strict_markers")
+    if strict_markers is None:
+        strict_markers = config.getini("strict")
+    if not strict_markers:
+        return
+
+    registered = {marker.name for marker in config._iter_registered_markers()}
+    if unknown := expr.idents() - registered:
+        raise UsageError(
+            f"Unknown marker(s) in '-m' expression: {', '.join(sorted(unknown))}"
+        )
 
 
 def pytest_collection_modifyitems(items: list[Item], config: Config) -> None:
