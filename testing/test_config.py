@@ -1220,7 +1220,7 @@ class TestConfigAPI:
         result.stdout.no_fnmatch_line("*TypeError*")
         result.stdout.no_fnmatch_line("*truncated*")
 
-    @pytest.mark.parametrize("bad_type",["integer", dict, int | dict])
+    @pytest.mark.parametrize("bad_type", ["integer", dict, int | dict])
     def test_addini_invalid_type(self, bad_type: object) -> None:
         parser = Parser(_ispytest=True)
         with pytest.raises(ValueError, match="invalid type for ini option 'ini_param'"):
