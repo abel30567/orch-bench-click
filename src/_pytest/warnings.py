@@ -31,6 +31,7 @@ def catch_warnings_for_item(
     Each warning captured triggers the ``pytest_warning_recorded`` hook.
     """
     with config._catch_configured_warnings(record=record) as log:
+        config._warnings_capture_depth += 1
         # apply filters from "filterwarnings" marks
         nodeid = "" if item is None else item.nodeid
         if item is not None:
@@ -41,6 +42,7 @@ def catch_warnings_for_item(
         try:
             yield
         finally:
+            config._warnings_capture_depth -= 1
             if record:
                 # mypy can't infer that record=True means log is not None; help it.
                 assert log is not None

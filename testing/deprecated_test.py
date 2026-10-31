@@ -1,6 +1,8 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import warnings
+
 from _pytest import deprecated
 from _pytest.pytester import Pytester
 from _pytest.scope import Scope
@@ -364,3 +366,186 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+def test_ini_string_option_non_string_value_deprecated(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("strip", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        strip = ["a", "b"]
+        """
+    )
+    pytester.makepyfile(
+        """
+        def test_a(pytestconfig):
+            assert pytestconfig.getini("strip") == ["a", "b"]
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1, warnings=1)
+    # The warning points at the caller of getini() and names the config file.
+    result.stdout.fnmatch_lines(
+        [
+            "*test_ini_string_option_non_string_value_deprecated.py:2:"
+            " PytestRemovedIn10Warning: Passing a value that is not a string"
+            " to a 'string'-typed ini option*",
+            "*pyproject.toml: option 'strip' got: [[]'a', 'b'[]]",
+        ]
+    )
+
+
+def test_ini_string_option_non_string_value_deprecated_at_configure(
+    pytester: Pytester,
+) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        junit_suite_name = ["x"]
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest("--junitxml=out.xml")
+    result.assert_outcomes(passed=1, warnings=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*= warnings summary =*",
+            "*junitxml.py:*",
+            "*PytestRemovedIn10Warning: Passing a value that is not a string*",
+            "*pyproject.toml: option 'junit_suite_name' got: [[]'x'[]]",
+        ]
+    )
+
+
+def test_ini_string_option_non_string_value_error_filter(pytester: Pytester) -> None:
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        junit_suite_name = ["x"]
+        filterwarnings = ["error"]
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest("--junitxml=out.xml")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Passing a value that is not a string to a 'string'-typed ini option*"]
+    )
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
+
+
+def test_ini_string_option_string_value_no_warning(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("strip", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        strip = "a"
+        """
+    )
+    config = pytester.parseconfig()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert config.getini("strip") == "a"
+
+
+def test_ini_string_option_non_string_value_runtime_capture(
+    pytester: Pytester,
+) -> None:
+    """At runtime the warning goes through the normal warnings machinery, so
+    pytest.warns, recwarn and filterwarnings marks all see it (#F4)."""
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("s_warns", "", type="string")
+            parser.addini("s_recwarn", "", type="string")
+            parser.addini("s_ignored", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        s_warns = ["a"]
+        s_recwarn = ["b"]
+        s_ignored = ["c"]
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_warns(pytestconfig):
+            with pytest.warns(
+                pytest.PytestRemovedIn10Warning, match="option 's_warns'"
+            ):
+                assert pytestconfig.getini("s_warns") == ["a"]
+
+        def test_recwarn(pytestconfig, recwarn):
+            assert pytestconfig.getini("s_recwarn") == ["b"]
+            assert len(recwarn.list) == 1
+            assert recwarn.pop(pytest.PytestRemovedIn10Warning)
+
+        @pytest.mark.filterwarnings("ignore::pytest.PytestRemovedIn10Warning")
+        def test_ignored(pytestconfig):
+            assert pytestconfig.getini("s_ignored") == ["c"]
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=3)
+    result.stdout.no_fnmatch_line("*warnings summary*")
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "def pytest_report_header(config):\n"
+        "    return f\"s_opt={config.getini('s_opt')}\"",
+        "def pytest_sessionstart(session):\n    session.config.getini('s_opt')",
+    ],
+    ids=["report_header", "sessionstart"],
+)
+@pytest.mark.parametrize("error", [False, True], ids=["default", "error_filter"])
+def test_ini_string_option_non_string_value_sessionstart_hooks(
+    pytester: Pytester, hook: str, error: bool
+) -> None:
+    """Hooks after pytest_configure but outside any warnings-capture block
+    still report the warning in the summary, or as a UsageError (#F5)."""
+    pytester.makeconftest(
+        "def pytest_addoption(parser):\n"
+        "    parser.addini('s_opt', '', type='string')\n" + hook + "\n"
+    )
+    filters = 'filterwarnings = ["error"]' if error else ""
+    pytester.makepyprojecttoml(
+        f"""
+        [tool.pytest.ini_options]
+        s_opt = ["a", "b"]
+        {filters}
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    result = pytester.runpytest()
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
+    if error:
+        assert result.ret == pytest.ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            ["ERROR: Passing a value that is not a string to a 'string'-typed*"]
+        )
+    else:
+        result.assert_outcomes(passed=1, warnings=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*= warnings summary =*",
+                "*conftest.py:*",
+                "*PytestRemovedIn10Warning: Passing a value that is not a string*",
+            ]
+        )
+        result.stderr.no_fnmatch_line("*PytestRemovedIn10Warning*")

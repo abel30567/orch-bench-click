@@ -1168,6 +1168,9 @@ class Config:
         self.trace = self.pluginmanager.trace.root.get("config")
         self.hook = self.pluginmanager.hook
         self._inicache: dict[str, Any] = {}
+        # Number of active ``catch_warnings_for_item`` blocks (warnings plugin).
+        # While > 0, warnings can be issued normally and will be captured.
+        self._warnings_capture_depth = 0
         self._inicfg: ConfigDict = {}
         self._cleanup_stack = contextlib.ExitStack()
         self.pluginmanager.register(self, "pytestconfig")
@@ -1951,6 +1954,30 @@ class Config:
         elif type == "bool":
             return _strtobool(str(value).strip())
         elif type == "string":
+            if not isinstance(value, str):
+                warning = _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
+                    inipath=self.inipath, name=name, value=value
+                )
+                if self._warnings_capture_depth or self.pluginmanager.is_blocked(
+                    "warnings"
+                ):
+                    # Inside a warnings-capture block (collection, tests,
+                    # sessionfinish, ...) or with the warnings plugin disabled:
+                    # warn normally so pytest.warns, recwarn and filterwarnings
+                    # marks apply.
+                    # Frames: _getini_ini <- _getini_value <- _getini <-
+                    # getini <- caller of getini().
+                    warnings.warn(warning, stacklevel=5)
+                else:
+                    # Outside any capture block (configure, sessionstart,
+                    # report_header, ...): record it as a config-time warning.
+                    try:
+                        # One extra frame for issue_config_time_warning.
+                        self.issue_config_time_warning(warning, stacklevel=6)
+                    except builtins.type(warning) as e:
+                        # Escalated by an "error" filter: report it as a usage
+                        # error rather than an internal error traceback.
+                        raise UsageError(str(e)) from e
             return value
         elif type == "int":
             if not isinstance(value, str):
