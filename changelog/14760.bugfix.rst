@@ -1,0 +1,1 @@
+Warnings issued from :hook:`pytest_configure` hooks now honor the :confval:`filterwarnings` configuration option and ``-W`` command-line filters.
