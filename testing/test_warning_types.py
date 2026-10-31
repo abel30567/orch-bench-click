@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import traceback
 
 from _pytest import warning_types
 from _pytest.pytester import Pytester
@@ -48,3 +49,29 @@ def test_warn_explicit_for_annotates_errors_with_location():
             pytest.raises,  # type: ignore[arg-type]
             warning_types.PytestWarning("test"),
         )
+
+
+def test_deprecated_constants_are_not_shared_warning_instances() -> None:
+    """Shared warning instances accumulate tracebacks when raised repeatedly
+    under ``-W error``, so every deprecation must produce a fresh instance."""
+    from _pytest import deprecated
+
+    for name, value in vars(deprecated).items():
+        assert not isinstance(value, Warning), name
+
+
+@pytest.mark.filterwarnings("error")
+def test_check_ispytest_raises_fresh_instance_each_time() -> None:
+    from _pytest.deprecated import check_ispytest
+
+    def call() -> None:
+        check_ispytest(False)
+
+    raised = []
+    for _ in range(3):
+        with pytest.raises(pytest.PytestDeprecationWarning) as excinfo:
+            call()
+        raised.append(excinfo.value)
+    assert len({id(e) for e in raised}) == 3
+    tb_lengths = {len(traceback.extract_tb(e.__traceback__)) for e in raised}
+    assert len(tb_lengths) == 1
