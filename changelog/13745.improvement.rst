@@ -1,0 +1,7 @@
+Fixture discovery now accepts subclasses of the internal ``FixtureFunctionDefinition`` type, allowing plugins to build on top of :func:`pytest.fixture`.
+
+Fixtures hidden behind other decorators now emit a :class:`~pytest.PytestWarning` at their definition instead of silently going missing:
+
+- a fixture wrapped by a custom decorator (e.g. using :func:`functools.wraps`) is not discovered;
+- ``@classmethod`` above ``@pytest.fixture`` is not discovered -- place ``@pytest.fixture`` above ``@classmethod``;
+- ``@staticmethod`` above ``@pytest.fixture`` is still discovered, but place ``@pytest.fixture`` above ``@staticmethod`` instead.
