@@ -1893,6 +1893,85 @@ def test_terminal_no_summary_warnings_header_once(pytester: Pytester) -> None:
     result.stdout.no_fnmatch_line("*= short test summary info =*")
 
 
+@pytest.mark.filterwarnings("default")
+@pytest.mark.parametrize(
+    "config_file, content",
+    [
+        ("pytest.toml", "[pytest]\nmax_warnings = {}\n"),
+        ("pytest.toml", '[pytest]\nmax_warnings = "{}"\n'),
+        ("pyproject.toml", "[tool.pytest]\nmax_warnings = {}\n"),
+        ("pyproject.toml", "[tool.pytest.ini_options]\nmax_warnings = {}\n"),
+        ("pytest.ini", "[pytest]\nmax_warnings = {}\n"),
+    ],
+)
+@pytest.mark.parametrize(
+    "threshold, expected_exitcode",
+    [(0, ExitCode.MAX_WARNINGS_ERROR), (1, ExitCode.OK)],
+)
+def test_max_warnings_config(
+    pytester: Pytester,
+    config_file: str,
+    content: str,
+    threshold: int,
+    expected_exitcode: ExitCode,
+) -> None:
+    """The max_warnings config option accepts native TOML integers as well as
+    strings, and 0 is a valid threshold distinct from unset."""
+    (pytester.path / config_file).write_text(
+        content.format(threshold), encoding="utf-8"
+    )
+    pytester.makepyfile(
+        """
+        import warnings
+
+        def test_warning():
+            warnings.warn(UserWarning("example warning"))
+        """
+    )
+    result = pytester.runpytest("-qq", "--disable-warnings")
+    assert result.ret == expected_exitcode
+    if expected_exitcode == ExitCode.MAX_WARNINGS_ERROR:
+        result.stdout.fnmatch_lines(
+            ["*Tests pass, but maximum allowed warnings exceeded: 1 > 0*"]
+        )
+
+
+@pytest.mark.filterwarnings("default")
+@pytest.mark.parametrize(
+    "content",
+    ["[pytest]\n", '[pytest]\nmax_warnings = ""\n'],
+)
+def test_max_warnings_config_unset(pytester: Pytester, content: str) -> None:
+    (pytester.path / "pytest.toml").write_text(content, encoding="utf-8")
+    pytester.makepyfile(
+        """
+        import warnings
+
+        def test_warning():
+            warnings.warn(UserWarning("example warning"))
+        """
+    )
+    result = pytester.runpytest("-qq", "--disable-warnings")
+    assert result.ret == ExitCode.OK
+
+
+@pytest.mark.filterwarnings("default")
+def test_max_warnings_config_override_ini(pytester: Pytester) -> None:
+    (pytester.path / "pytest.toml").write_text(
+        "[pytest]\nmax_warnings = 5\n", encoding="utf-8"
+    )
+    pytester.makepyfile(
+        """
+        import warnings
+
+        def test_warning():
+            warnings.warn(UserWarning("example warning"))
+        """
+    )
+    result = pytester.runpytest("-qq", "--disable-warnings", "-o", "max_warnings=0")
+    assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+
 @pytest.fixture(scope="session")
 def tr() -> TerminalReporter:
     config = _pytest.config._prepareconfig([])
