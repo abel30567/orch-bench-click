@@ -76,6 +76,7 @@ from _pytest.scope import HIGH_SCOPES
 from _pytest.scope import Scope
 from _pytest.scope import ScopeName
 from _pytest.warning_types import PytestWarning
+from _pytest.warning_types import warn_explicit_for
 
 
 if sys.version_info < (3, 11):
@@ -1431,6 +1432,79 @@ class FixtureFunctionDefinition:
         return self._fixture_function
 
 
+def _warn_for_fixture_definition(
+    fixture_def: FixtureFunctionDefinition, message: str
+) -> None:
+    """Issue a PytestWarning pointing at the definition of the fixture function."""
+    func: object = fixture_def._get_wrapped_function()
+    func = safe_getattr(func, "__func__", func)
+    try:
+        func = get_real_func(func)
+    except Exception:
+        pass
+    warning = PytestWarning(message)
+    if isinstance(func, types.FunctionType):
+        warn_explicit_for(func, warning)
+    else:
+        warnings.warn(warning, stacklevel=4)
+
+
+def _find_hidden_fixture(obj: object) -> FixtureFunctionDefinition | None:
+    """Follow a ``__wrapped__`` chain (as set by ``functools.wraps``) looking
+    for a fixture definition hidden behind other decorators."""
+    seen: set[int] = set()
+    current = obj
+    while id(current) not in seen and len(seen) < 100:
+        seen.add(id(current))
+        current = safe_getattr(current, "__wrapped__", None)
+        if current is None:
+            return None
+        if isinstance(current, FixtureFunctionDefinition):
+            return current
+    return None
+
+
+def _check_wrapped_fixture(holder: object, name: str, obj: object) -> bool:
+    """Warn about fixtures wrapped by other decorators.
+
+    Returns True if the attribute should be skipped (not discovered).
+    """
+    try:
+        raw = inspect.getattr_static(holder, name, None)
+    except Exception:
+        raw = None
+    if isinstance(raw, (classmethod, staticmethod)):
+        inner = safe_getattr(raw, "__func__", None)
+        if isinstance(inner, FixtureFunctionDefinition):
+            if isinstance(raw, classmethod):
+                _warn_for_fixture_definition(
+                    inner,
+                    f"cannot discover fixture {inner.name!r} because it is wrapped "
+                    "by @classmethod; place @pytest.fixture above @classmethod",
+                )
+                return True
+            _warn_for_fixture_definition(
+                inner,
+                f"fixture {inner.name!r} is wrapped by @staticmethod above "
+                "@pytest.fixture; place @pytest.fixture above @staticmethod",
+            )
+            return False
+    if (
+        obj is None
+        or isinstance(obj, FixtureFunctionDefinition)
+        or not isinstance(obj, (types.FunctionType, types.MethodType))
+    ):
+        return False
+    hidden = _find_hidden_fixture(obj)
+    if hidden is not None:
+        _warn_for_fixture_definition(
+            hidden,
+            f"cannot discover fixture {hidden.name!r} due to being wrapped in decorators",
+        )
+        return True
+    return False
+
+
 @overload
 def fixture(
     fixture_function: Callable[..., object],
@@ -2105,7 +2179,9 @@ class FixtureManager:
             # The attribute can be an arbitrary descriptor, so the attribute
             # access below can raise. safe_getattr() ignores such exceptions.
             obj_ub = safe_getattr(holderobj_tp, name, None)
-            if type(obj_ub) is FixtureFunctionDefinition:
+            if _check_wrapped_fixture(holderobj_tp, name, obj_ub):
+                continue
+            if isinstance(obj_ub, FixtureFunctionDefinition):
                 marker = obj_ub._fixture_function_marker
                 if marker.name:
                     fixture_name = marker.name
