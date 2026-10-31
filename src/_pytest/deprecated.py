@@ -90,6 +90,14 @@ FIXTURE_GETFIXTUREVALUE_DURING_TEARDOWN = UnformattedWarning(
     "See https://docs.pytest.org/en/stable/deprecations.html#dynamic-fixture-request-during-teardown",
 )
 
+INI_STRING_NON_STRING_VALUE = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    "Passing a value that is not a string to a 'string'-typed ini option is deprecated.\n"
+    "{inipath}: config option '{name}' expects a string, got {value_type}: {value!r}\n"
+    "This will become an error in pytest 10.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#ini-string-non-string-value",
+)
+
 PASTEBIN = PytestRemovedIn10Warning(
     "The --pastebin option is deprecated. "
     "The functionality is now available in an external plugin package, pytest-pastebin.\n"
