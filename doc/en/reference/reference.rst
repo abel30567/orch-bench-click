@@ -365,6 +365,8 @@ For more details, consult the full :ref:`fixtures docs <fixture>`.
 .. autofunction:: pytest.fixture
     :decorator:
 
+.. autoclass:: pytest.FixtureFunctionDefinition()
+
 
 .. fixture:: capfd
 

@@ -1035,3 +1035,33 @@ def test_required_option_help(pytester: Pytester) -> None:
     result = pytester.runpytest("-h", x)
     result.stdout.no_fnmatch_line("*argument --xyz is required*")
     assert "general:" in result.stdout.str()
+
+
+def test_conftest_wrapped_fixture_warns(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        import functools
+        import pytest
+
+        def deco(f):
+            @functools.wraps(f)
+            def wrapper(*args, **kwargs):
+                return f(*args, **kwargs)
+            return wrapper
+
+        @deco
+        @pytest.fixture
+        def wrapped():
+            return 1
+        """
+    )
+    pytester.makepyfile("def test(wrapped): pass")
+    result = pytester.runpytest("-Wdefault")
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*fixture 'wrapped' not found*",
+            "*conftest.py:10: PytestWarning: cannot discover fixture 'wrapped' "
+            "due to being wrapped in decorators",
+        ]
+    )

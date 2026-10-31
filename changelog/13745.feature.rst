@@ -1,0 +1,3 @@
+:class:`pytest.FixtureFunctionDefinition` is now public, and its subclasses are discovered as fixtures, allowing plugins to customize how fixtures are declared.
+
+Fixtures hidden behind another decorator now emit a :class:`~pytest.PytestWarning` at their definition, instead of being silently ignored: place :func:`@pytest.fixture <pytest.fixture>` above ``@classmethod`` and ``@staticmethod``, and do not wrap it in custom decorators.
