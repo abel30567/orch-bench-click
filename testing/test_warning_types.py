@@ -48,3 +48,34 @@ def test_warn_explicit_for_annotates_errors_with_location():
             pytest.raises,  # type: ignore[arg-type]
             warning_types.PytestWarning("test"),
         )
+
+
+def test_deprecated_module_has_no_shared_warning_instances() -> None:
+    """Warning constants in _pytest.deprecated must not be shared instances:
+    under ``-W error``, ``warnings.warn()`` raises the given object itself, and
+    a shared exception accumulates traceback frames across raises."""
+    from _pytest import deprecated
+
+    for name, value in vars(deprecated).items():
+        assert not isinstance(value, Warning), name
+
+
+@pytest.mark.filterwarnings("error")
+def test_deprecation_warning_traceback_does_not_accumulate() -> None:
+    from _pytest.deprecated import check_ispytest
+
+    def tb_depth(exc: BaseException) -> int:
+        depth = 0
+        tb = exc.__traceback__
+        while tb is not None:
+            depth += 1
+            tb = tb.tb_next
+        return depth
+
+    raised = []
+    for _ in range(3):
+        with pytest.raises(pytest.PytestDeprecationWarning) as excinfo:
+            check_ispytest(False)
+        raised.append(excinfo.value)
+    assert len({id(e) for e in raised}) == len(raised)
+    assert len({tb_depth(e) for e in raised}) == 1
