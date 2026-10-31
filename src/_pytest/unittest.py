@@ -38,6 +38,7 @@ from _pytest.runner import CallInfo
 from _pytest.runner import check_interactive_exception
 from _pytest.subtests import SubtestContext
 from _pytest.subtests import SubtestReport
+from _pytest.timing import UNMEASURED
 
 
 if sys.version_info[:2] < (3, 11):
@@ -444,9 +445,7 @@ class TestCaseFunction(Function):
         call_info = CallInfo[None](
             None,
             exception_info,
-            start=0,
-            stop=0,
-            duration=0,
+            UNMEASURED,
             when="call",
             _ispytest=True,
         )

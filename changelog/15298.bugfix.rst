@@ -1,0 +1,1 @@
+Fixed subtest durations and timestamps being wrong (e.g. negative) when a test mocks ``time.perf_counter`` or ``time.time``, as clock-mocking libraries like freezegun do -- subtests now use pytest's internal timing like regular tests.
