@@ -1168,6 +1168,9 @@ class Config:
         self.trace = self.pluginmanager.trace.root.get("config")
         self.hook = self.pluginmanager.hook
         self._inicache: dict[str, Any] = {}
+        # Set once pytest_configure has run; warnings after that point are
+        # issued normally so the regular warning capture applies.
+        self._configure_done = False
         self._inicfg: ConfigDict = {}
         self._cleanup_stack = contextlib.ExitStack()
         self.pluginmanager.register(self, "pytestconfig")
@@ -1275,11 +1278,13 @@ class Config:
                 stack.enter_context(self._catch_configured_warnings(record=False))
                 self.add_cleanup(stack.pop_all().close)
         self.hook.pytest_configure.call_historic(kwargs=dict(config=self))
+        self._configure_done = True
 
     def _ensure_unconfigure(self) -> None:
         try:
             if self._configured:
                 self._configured = False
+                self._configure_done = False
                 try:
                     self.hook.pytest_unconfigure(config=self)
                 finally:
@@ -1955,14 +1960,20 @@ class Config:
                 warning = _pytest.deprecated.INI_STRING_NON_STRING_VALUE.format(
                     inipath=self.inipath, name=name, value=value
                 )
-                try:
-                    # Frames: issue_config_time_warning <- _getini_ini <-
-                    # _getini_value <- _getini <- getini <- caller of getini().
-                    self.issue_config_time_warning(warning, stacklevel=6)
-                except builtins.type(warning) as e:
-                    # Escalated by an "error" filter: report it as a usage
-                    # error rather than an internal error traceback.
-                    raise UsageError(str(e)) from e
+                if self._configure_done:
+                    # Runtime (tests, fixtures, hooks): warn normally so
+                    # pytest.warns, recwarn and filterwarnings marks apply.
+                    # Frames: _getini_ini <- _getini_value <- _getini <-
+                    # getini <- caller of getini().
+                    warnings.warn(warning, stacklevel=5)
+                else:
+                    try:
+                        # One extra frame for issue_config_time_warning.
+                        self.issue_config_time_warning(warning, stacklevel=6)
+                    except builtins.type(warning) as e:
+                        # Escalated by an "error" filter: report it as a usage
+                        # error rather than an internal error traceback.
+                        raise UsageError(str(e)) from e
             return value
         elif type == "int":
             if not isinstance(value, str):

@@ -392,8 +392,8 @@ def test_ini_string_option_non_string_value_deprecated(pytester: Pytester) -> No
     # The warning points at the caller of getini() and names the config file.
     result.stdout.fnmatch_lines(
         [
-            "test_ini_string_option_non_string_value_deprecated.py:2",
-            "*PytestRemovedIn10Warning: Passing a value that is not a string"
+            "*test_ini_string_option_non_string_value_deprecated.py:2:"
+            " PytestRemovedIn10Warning: Passing a value that is not a string"
             " to a 'string'-typed ini option*",
             "*pyproject.toml: option 'strip' got: [[]'a', 'b'[]]",
         ]
@@ -456,3 +456,49 @@ def test_ini_string_option_string_value_no_warning(pytester: Pytester) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert config.getini("strip") == "a"
+
+
+def test_ini_string_option_non_string_value_runtime_capture(
+    pytester: Pytester,
+) -> None:
+    """At runtime the warning goes through the normal warnings machinery, so
+    pytest.warns, recwarn and filterwarnings marks all see it (#F4)."""
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("s_warns", "", type="string")
+            parser.addini("s_recwarn", "", type="string")
+            parser.addini("s_ignored", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        s_warns = ["a"]
+        s_recwarn = ["b"]
+        s_ignored = ["c"]
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_warns(pytestconfig):
+            with pytest.warns(
+                pytest.PytestRemovedIn10Warning, match="option 's_warns'"
+            ):
+                assert pytestconfig.getini("s_warns") == ["a"]
+
+        def test_recwarn(pytestconfig, recwarn):
+            assert pytestconfig.getini("s_recwarn") == ["b"]
+            assert len(recwarn.list) == 1
+            assert recwarn.pop(pytest.PytestRemovedIn10Warning)
+
+        @pytest.mark.filterwarnings("ignore::pytest.PytestRemovedIn10Warning")
+        def test_ignored(pytestconfig):
+            assert pytestconfig.getini("s_ignored") == ["c"]
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=3)
+    result.stdout.no_fnmatch_line("*warnings summary*")
