@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 
+from _pytest import deprecated
 from _pytest import warning_types
 from _pytest.pytester import Pytester
 import pytest
@@ -48,3 +50,24 @@ def test_warn_explicit_for_annotates_errors_with_location():
             pytest.raises,  # type: ignore[arg-type]
             warning_types.PytestWarning("test"),
         )
+
+
+@pytest.mark.parametrize("name", [name for name in vars(deprecated) if name.isupper()])
+def test_deprecated_warnings_are_not_shared_instances(name: str) -> None:
+    """A warning instance raised under ``-W error`` keeps its traceback, so
+    deprecated.py must not hold instances that are raised more than once."""
+    assert not isinstance(getattr(deprecated, name), Warning)
+
+
+def test_deprecated_warning_traceback_does_not_accumulate() -> None:
+    def trigger() -> pytest.ExceptionInfo[pytest.PytestDeprecationWarning]:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(pytest.PytestDeprecationWarning) as excinfo:
+                deprecated.check_ispytest(False)
+        return excinfo
+
+    first = trigger()
+    second = trigger()
+    assert first.value is not second.value
+    assert len(first.traceback) == len(second.traceback)
