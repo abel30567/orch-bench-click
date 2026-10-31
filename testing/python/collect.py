@@ -2081,14 +2081,41 @@ class TestWrappedFixture:
             cycle.__wrapped__ = cycle
             wrapped_plain = functools.wraps(print)(lambda: None)
 
+            class UnhashableMeta(type):
+                def __eq__(cls, other):
+                    return cls is other
+
+            class Unhashable(metaclass=UnhashableMeta):
+                pass
+
+            unhashable = Unhashable()
+
             class TestIt:
                 magic = Magic()
                 spec_mock = mock.Mock(spec=fix)
+                unhashable = Unhashable()
 
                 def test_it(self):
                     pass
             """
         )
+        result = pytester.runpytest("-Werror")
+        result.assert_outcomes(passed=1)
+
+    def test_lookalikes_ignored_in_conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            class UnhashableMeta(type):
+                def __eq__(cls, other):
+                    return cls is other
+
+            class Unhashable(metaclass=UnhashableMeta):
+                pass
+
+            unhashable = Unhashable()
+            """
+        )
+        pytester.makepyfile("def test_it(): pass")
         result = pytester.runpytest("-Werror")
         result.assert_outcomes(passed=1)
 
@@ -2212,25 +2239,134 @@ class TestWrappedFixture:
             ]
         )
 
+    STRICT_INI = """
+        [pytest]
+        filterwarnings = error
+        """
+
     def test_outside_of_collectors_as_error(
         self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
     ) -> None:
-        pytester.makeini(
-            """
-            [pytest]
-            filterwarnings = error
-            """
-        )
+        pytester.makeini(self.STRICT_INI)
         result = pytester.runpytest(*wrapped_outside_of_collectors)
-        assert result.ret == pytest.ExitCode.USAGE_ERROR
-        result.stderr.fnmatch_lines(
+        assert result.ret == pytest.ExitCode.INTERRUPTED
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(
             [
-                "ERROR: *.py:*: cannot discover fixture 'wrapped' due to being"
-                " wrapped in decorators"
+                "*.py:*: cannot discover fixture 'wrapped' due to being wrapped in"
+                " decorators",
             ]
         )
         result.stdout.no_fnmatch_line("*INTERNALERROR*")
         result.stderr.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_outside_of_collectors_as_error_keeps_collection_errors(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(test_broken="1 / 0")
+        result = pytester.runpytest(*wrapped_outside_of_collectors)
+        assert result.ret == pytest.ExitCode.INTERRUPTED
+        result.assert_outcomes(errors=2)
+        result.stdout.fnmatch_lines(["*ZeroDivisionError*", "*Interrupted: 2 errors*"])
+
+    def test_outside_of_collectors_as_error_keeps_usage_errors(
+        self, pytester: Pytester, wrapped_outside_of_collectors: list[str]
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        result = pytester.runpytest(*wrapped_outside_of_collectors, "missing.py")
+        assert result.ret == pytest.ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(["ERROR: *not found*missing.py*"])
+
+    def test_outside_of_collectors_with_xdist(
+        self,
+        pytester: Pytester,
+        wrapped_outside_of_collectors: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pytest.importorskip("xdist")
+        monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+        pytester.makeini(self.STRICT_INI)
+        result = pytester.runpytest_subprocess(
+            *wrapped_outside_of_collectors, "-n2", "-pxdist"
+        )
+        assert result.ret == pytest.ExitCode.TESTS_FAILED
+        result.stdout.fnmatch_lines(
+            ["*.py:*: cannot discover fixture 'wrapped' due to being wrapped in*"]
+        )
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    @pytest.mark.parametrize("option", ["--fixtures", "--fixtures-per-test"])
+    def test_outside_of_collectors_as_error_informational_options(
+        self,
+        pytester: Pytester,
+        wrapped_outside_of_collectors: list[str],
+        option: str,
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(
+            test_uses_fixture="""
+            import pytest
+
+            @pytest.fixture
+            def listed():
+                pass
+
+            def test_listed(listed):
+                pass
+            """
+        )
+        result = pytester.runpytest(*wrapped_outside_of_collectors, option)
+        assert result.ret == pytest.ExitCode.OK
+        result.stdout.fnmatch_lines(["*listed*", "*cannot discover fixture 'wrapped'*"])
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    @pytest.mark.parametrize(
+        "hook", ["pytest_collection_finish(session)", "pytest_runtestloop(session)"]
+    )
+    def test_plugin_registered_after_collection_as_error(
+        self, pytester: Pytester, hook: str
+    ) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makeconftest(
+            self.DECORATOR
+            + f"""
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def late(self):
+                return 1
+
+        @pytest.hookimpl(tryfirst=True)
+        def {hook}:
+            session.config.pluginmanager.register(Plugin())
+        """
+        )
+        pytester.makepyfile("def test_it(): pass")
+        result = pytester.runpytest()
+        result.assert_outcomes(errors=1)
+        result.stdout.fnmatch_lines(["*cannot discover fixture 'late'*"])
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
+
+    def test_plugin_registered_during_test_as_error(self, pytester: Pytester) -> None:
+        pytester.makeini(self.STRICT_INI)
+        pytester.makepyfile(
+            self.DECORATOR
+            + """
+        class Plugin:
+            @deco
+            @pytest.fixture
+            def late(self):
+                return 1
+
+        def test_it(pytestconfig):
+            pytestconfig.pluginmanager.register(Plugin())
+        """
+        )
+        result = pytester.runpytest()
+        assert result.ret == pytest.ExitCode.TESTS_FAILED
+        result.assert_outcomes(passed=1, errors=1)
+        result.stdout.no_fnmatch_line("*INTERNALERROR*")
 
     def test_plugin_registered_after_collection(self, pytester: Pytester) -> None:
         """Warnings aren't deferred once there's no end of collection to wait for."""

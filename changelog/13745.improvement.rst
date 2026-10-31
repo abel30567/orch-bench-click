@@ -8,4 +8,4 @@ Fixtures hidden behind another decorator now issue a :class:`~pytest.PytestWarni
 
 Placing ``@pytest.fixture`` above ``@classmethod`` or ``@staticmethod`` keeps working, without a warning, now also in plugins registered as a class.
 
-When turned into errors, these warnings are reported as a usage error for fixtures in plugins and conftest files.
+When turned into errors, these warnings are reported as collection errors for fixtures in plugins and conftest files.

@@ -55,7 +55,6 @@ from _pytest.config import _PluggyPlugin
 from _pytest.config import Config
 from _pytest.config import ExitCode
 from _pytest.config import hookimpl
-from _pytest.config import UsageError
 from _pytest.config.argparsing import Parser
 from _pytest.deprecated import check_ispytest
 from _pytest.deprecated import CLASS_FIXTURE_INSTANCE_METHOD
@@ -74,6 +73,7 @@ from _pytest.outcomes import skip
 from _pytest.outcomes import TEST_OUTCOME
 from _pytest.pathlib import absolutepath
 from _pytest.pathlib import bestrelpath
+from _pytest.reports import CollectReport
 from _pytest.scope import HIGH_SCOPES
 from _pytest.scope import Scope
 from _pytest.scope import ScopeName
@@ -88,7 +88,6 @@ if TYPE_CHECKING:
     from _pytest.python import CallSpec2
     from _pytest.python import Function
     from _pytest.python import Metafunc
-    from _pytest.reports import CollectReport
 
 
 # The value of the fixture -- return/yield of the fixture function (type variable).
@@ -1452,10 +1451,30 @@ class _LocatedWarning(NamedTuple):
     filename: str
     lineno: int
 
+    def issue(self) -> None:
+        warnings.warn_explicit(
+            message=self.message,
+            category=None,
+            filename=self.filename,
+            lineno=self.lineno,
+        )
+
 
 def _is_fixture_definition(obj: object) -> bool:
     # Not isinstance(), which a Mock(spec=...) passes through its __class__.
     return issubclass(type(obj), FixtureFunctionDefinition)
+
+
+def _safe_getattr_static(obj: object, name: str) -> Any:
+    """Like ``inspect.getattr_static``, with None for a failed lookup.
+
+    The lookup can raise for arbitrary objects, e.g. it hashes the classes in
+    the object's MRO, which fails for a metaclass which is unhashable.
+    """
+    try:
+        return inspect.getattr_static(obj, name, None)
+    except Exception:
+        return None
 
 
 def _find_wrapped_fixture(obj: Any) -> FixtureFunctionDefinition | None:
@@ -1472,7 +1491,7 @@ def _find_wrapped_fixture(obj: Any) -> FixtureFunctionDefinition | None:
         if issubclass(type(obj), classmethod | staticmethod):
             obj = obj.__func__
         else:
-            obj = inspect.getattr_static(obj, "__wrapped__", None)
+            obj = _safe_getattr_static(obj, "__wrapped__")
     return None
 
 
@@ -1783,7 +1802,7 @@ class FixtureManager:
         # possibly before warnings are captured. So their warnings wait for the
         # end of collection, while this is not None.
         self._deferred_warnings: list[_LocatedWarning] | None = []
-        self._defer_warnings = False
+        self._parsing_plugin = False
         session.config.pluginmanager.register(self, "funcmanage")
         # Flush initial conftests from directories above rootpath immediately.
         # These will never get a Directory collector, so they need Session scope.
@@ -1880,34 +1899,41 @@ class FixtureManager:
         (e.g. UsageError for a bad path). These conftests' fixtures aren't
         needed since their directories' tests weren't collected either.
 
-        Also issue the warnings deferred by _parse_plugin_factories(). A warning
-        turned into an error is a usage error, since it doesn't belong to any
-        collector.
+        Also issue the warnings deferred by _warn_wrapped_fixture().
         """
         self._pending_conftests.clear()
 
         deferred, self._deferred_warnings = self._deferred_warnings, None
-        errors = []
         for warning in deferred or ():
-            try:
-                warnings.warn_explicit(
-                    message=warning.message,
-                    category=None,
-                    filename=warning.filename,
-                    lineno=warning.lineno,
-                )
-            except PytestWarning as e:
-                errors.append(f"{warning.filename}:{warning.lineno}: {e}")
-        if errors:
-            raise UsageError(*errors)
+            self._issue_plugin_warning(warning)
 
     def _parse_plugin_factories(self, plugin: object, node: nodes.Node) -> None:
-        """Like parsefactories(), deferring warnings until the end of collection."""
-        self._defer_warnings = self._deferred_warnings is not None
+        """Like parsefactories(), for a holder outside of a collector's collect()."""
+        self._parsing_plugin = True
         try:
             self.parsefactories(holder=plugin, node=node)
         finally:
-            self._defer_warnings = False
+            self._parsing_plugin = False
+
+    def _issue_plugin_warning(self, warning: _LocatedWarning) -> None:
+        """Issue a warning about a plugin or conftest.
+
+        A warning turned into an error doesn't belong to any collector, so it's
+        reported as a collection error of the session. Unlike an exception, this
+        reaches the controller from pytest-xdist workers, can happen anywhere in
+        the session, and doesn't stop options such as ``--fixtures``.
+        """
+        try:
+            warning.issue()
+        except PytestWarning as e:
+            self.session.ihook.pytest_collectreport(
+                report=CollectReport(
+                    nodeid="",
+                    outcome="failed",
+                    longrepr=f"{warning.filename}:{warning.lineno}: {e}",
+                    result=None,
+                )
+            )
 
     def _getautousenames(self, node: nodes.Node) -> Iterator[str]:
         """Return the names of autouse fixtures applicable to node."""
@@ -2188,7 +2214,7 @@ class FixtureManager:
             obj_ub = self._resolve_fixture_definition(
                 name,
                 safe_getattr(holderobj_tp, name, None),
-                inspect.getattr_static(holderobj_tp, name, None),
+                _safe_getattr_static(holderobj_tp, name),
             )
             if obj_ub is not None:
                 marker = obj_ub._fixture_function_marker
@@ -2277,16 +2303,12 @@ class FixtureManager:
         key = (str(path), lineno, message)
         if key not in self._wrapped_fixture_warnings:
             warning = _LocatedWarning(PytestWarning(message), str(path), lineno + 1)
-            if self._defer_warnings:
-                assert self._deferred_warnings is not None
+            if not self._parsing_plugin:
+                warning.issue()
+            elif self._deferred_warnings is not None:
                 self._deferred_warnings.append(warning)
             else:
-                warnings.warn_explicit(
-                    message=warning.message,
-                    category=None,
-                    filename=warning.filename,
-                    lineno=warning.lineno,
-                )
+                self._issue_plugin_warning(warning)
             self._wrapped_fixture_warnings.add(key)
 
     def getfixturedefs(
