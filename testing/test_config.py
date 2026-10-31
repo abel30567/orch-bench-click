@@ -3157,3 +3157,53 @@ class TestProgName:
             match="pytest.console_main.*is deprecated",
         ):
             console_main()
+
+
+class TestWarningFiltersDuringConfigure:
+    """Warnings issued from pytest_configure honor configured filters."""
+
+    @pytest.fixture(autouse=True)
+    def _conftest(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
+            """
+            import warnings
+
+            def pytest_configure(config):
+                warnings.warn("configure-time warning", UserWarning)
+            """
+        )
+        pytester.makepyfile("def test_ok(): pass")
+
+    def test_unfiltered_warning_is_shown(self, pytester: Pytester) -> None:
+        result = pytester.runpytest_subprocess()
+        result.assert_outcomes(passed=1)
+        result.stderr.fnmatch_lines(["*UserWarning: configure-time warning*"])
+
+    def test_ini_filter_ignores_warning(self, pytester: Pytester) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = ignore::UserWarning
+            """
+        )
+        result = pytester.runpytest_subprocess()
+        result.assert_outcomes(passed=1)
+        assert "configure-time warning" not in result.stderr.str()
+        assert "configure-time warning" not in result.stdout.str()
+
+    def test_cmdline_filter_ignores_warning(self, pytester: Pytester) -> None:
+        result = pytester.runpytest_subprocess("-W", "ignore::UserWarning")
+        result.assert_outcomes(passed=1)
+        assert "configure-time warning" not in result.stderr.str()
+        assert "configure-time warning" not in result.stdout.str()
+
+    def test_ini_error_filter_raises(self, pytester: Pytester) -> None:
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error::UserWarning
+            """
+        )
+        result = pytester.runpytest_subprocess()
+        assert result.ret != 0
+        result.stderr.fnmatch_lines(["*UserWarning: configure-time warning*"])
