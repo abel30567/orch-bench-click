@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from _pytest import timing
 from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionRepr
 from _pytest.approx import approx
@@ -10,7 +11,47 @@ from _pytest.config import Config
 from _pytest.pytester import Pytester
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
+from _pytest.runner import CallInfo
 import pytest
+
+
+def _call_info(duration: timing.Duration) -> CallInfo[None]:
+    return CallInfo[None](None, None, duration, "call", _ispytest=True)
+
+
+class TestCallInfoTiming:
+    duration = timing.Duration(
+        start=timing.Instant(time=100.0, perf_count=1000.0),
+        stop=timing.Instant(time=102.0, perf_count=1000.5),
+    )
+
+    def test_read_from_duration(self) -> None:
+        call = _call_info(self.duration)
+        assert (call.start, call.stop, call.duration) == (100.0, 102.0, 0.5)
+
+    def test_unmeasured(self) -> None:
+        call = _call_info(timing.UNMEASURED)
+        assert (call.start, call.stop, call.duration) == (0.0, 0.0, 0.0)
+
+    def test_assign_start(self) -> None:
+        call = _call_info(self.duration)
+        call.start = 50.0
+        assert (call.start, call.stop, call.duration) == (50.0, 102.0, 0.5)
+
+    def test_assign_stop(self) -> None:
+        call = _call_info(self.duration)
+        call.stop = 150.0
+        assert (call.start, call.stop, call.duration) == (100.0, 150.0, 0.5)
+
+    def test_assign_duration(self) -> None:
+        call = _call_info(self.duration)
+        call.duration = 0.1
+        assert (call.start, call.stop, call.duration) == (100.0, 102.0, 0.1)
+
+    def test_assign_does_not_change_shared_duration(self) -> None:
+        call = _call_info(timing.UNMEASURED)
+        call.start = call.stop = call.duration = 1.0
+        assert _call_info(timing.UNMEASURED).duration == 0.0
 
 
 class TestReportSerialization:

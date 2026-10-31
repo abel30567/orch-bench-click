@@ -1,0 +1,1 @@
+Subtests no longer report negative durations or a wrong stop timestamp when a test mocks :func:`time.perf_counter` or :func:`time.time`.
