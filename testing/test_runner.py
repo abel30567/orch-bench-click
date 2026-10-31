@@ -1273,3 +1273,38 @@ def test_teardown_session_stopped(pytester: Pytester) -> None:
     )
     result = pytester.runpytest("--stepwise")
     result.assert_outcomes(failed=1, errors=1)
+
+
+class TestRecursionErrorReport:
+    """The traceback of a RecursionError whose origin can't be located is
+    truncated, unless a full trace is requested."""
+
+    @pytest.fixture(autouse=True)
+    def recursive_test(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            def f(x):
+                f(x + 1)
+
+            def test_recursion():
+                f(0)
+            """
+        )
+
+    def test_truncated(self, pytester: Pytester) -> None:
+        result = pytester.runpytest_inprocess()
+        result.assert_outcomes(failed=1)
+        result.stdout.fnmatch_lines(
+            [
+                "!!! Recursion error detected, but the origin of the recursion could not be located.",
+                "  Displaying first and last 10 stack frames out of *.",
+                "  Pass `--full-trace` to see all frames.",
+            ]
+        )
+        assert result.stdout.str().count("f(x + 1)") <= 20
+
+    def test_full_trace(self, pytester: Pytester) -> None:
+        result = pytester.runpytest_subprocess("--full-trace")
+        result.assert_outcomes(failed=1)
+        result.stdout.no_fnmatch_line("*Recursion*detected*")
+        assert result.stdout.str().count("f(x + 1)") > 20

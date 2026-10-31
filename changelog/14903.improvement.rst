@@ -1,0 +1,3 @@
+Tests failing with a :class:`RecursionError` whose origin cannot be located (for example because the locals differ in every frame) are now reported much faster: the traceback is limited to the first and last 10 stack frames, unless :option:`--full-trace` is used. This also applies to tests marked with :func:`pytest.mark.xfail`, whose traceback is built even though it is not shown.
+
+Recursion detection no longer mistakes an exception re-raised several times within the same frame for recursion, which could cut the traceback shown with :option:`--full-trace` short.
