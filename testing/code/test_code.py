@@ -225,3 +225,51 @@ def test_ExceptionChainRepr():
     assert isinstance(repr1, ExceptionChainRepr)
     assert hash(repr1) != hash(repr2)
     assert repr1 is not excinfo1.getrepr()
+
+
+def test_statement_linenos_memoized() -> None:
+    import ast
+
+    from _pytest._code.source import _statement_linenos
+    from _pytest._code.source import get_statement_startend2
+
+    node = ast.parse("@dec\ndef f():\n    x = 1\n    y = 2\n")
+    first = _statement_linenos(node)
+    assert first == [0, 1, 2, 3]
+    assert _statement_linenos(node) is first
+    assert get_statement_startend2(2, node) == (2, 3)
+
+
+def test_truncate_recursive_traceback_without_origin() -> None:
+    from _pytest._code.code import ExceptionInfoFormatter
+
+    def rec(n: int) -> None:
+        # Locals differ in each frame, so recursionindex() finds no origin.
+        rec(n + 1)
+
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(100)
+    try:
+        with pytest.raises(RecursionError) as excinfo:
+            rec(0)
+    finally:
+        sys.setrecursionlimit(limit)
+
+    tb = excinfo.traceback
+    assert len(tb) > 20
+    assert tb.recursionindex() is None
+
+    truncated, extraline = ExceptionInfoFormatter()._truncate_recursive_traceback(tb)
+    assert len(truncated) == 20
+    assert list(truncated) == list(tb[:10]) + list(tb[-10:])
+    assert extraline == (
+        "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+        f"  Displaying first and last 10 stack frames out of {len(tb)}.\n"
+        "  Pass `--full-trace` to see all frames."
+    )
+
+    untruncated, extraline = ExceptionInfoFormatter(
+        tbfilter=False
+    )._truncate_recursive_traceback(tb)
+    assert len(untruncated) == len(tb)
+    assert extraline is None

@@ -1,0 +1,1 @@
+Improved the performance of formatting long tracebacks caused by ``RecursionError``: statement line numbers are now memoized per parsed module, and when the origin of the recursion cannot be located only the first and last 10 frames are rendered (pass ``--full-trace`` to see all frames).
