@@ -1,0 +1,1 @@
+The :confval:`truncation_limit_lines` and :confval:`truncation_limit_chars` configuration options are now of type ``int``, so they accept native integer values in TOML configuration files (``pyproject.toml``, ``pytest.toml``) instead of requiring strings.
