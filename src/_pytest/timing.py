@@ -42,6 +42,23 @@ class Instant:
         init=False,
     )
 
+    @classmethod
+    def _at(cls, time: float, perf_count: float) -> Instant:
+        """Create an instant with explicit values (internal use)."""
+        instant = cls.__new__(cls)
+        object.__setattr__(instant, "time", time)
+        object.__setattr__(instant, "perf_count", perf_count)
+        return instant
+
+    def _replace(
+        self, *, time: float | None = None, perf_count: float | None = None
+    ) -> Instant:
+        """Return a copy of this instant with the given values replaced (internal use)."""
+        return Instant._at(
+            self.time if time is None else time,
+            self.perf_count if perf_count is None else perf_count,
+        )
+
     def elapsed(self) -> Duration:
         """Measure the duration since `Instant` was created."""
         return Duration(start=self, stop=Instant())
@@ -62,6 +79,10 @@ class Duration:
     def seconds(self) -> float:
         """Elapsed time of the duration in seconds, measured using a performance counter for precise timing."""
         return self.stop.perf_count - self.start.perf_count
+
+
+#: A duration for a call that was not measured.
+UNMEASURED = Duration(start=Instant._at(0.0, 0.0), stop=Instant._at(0.0, 0.0))
 
 
 @dataclasses.dataclass
