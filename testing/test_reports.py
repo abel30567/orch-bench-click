@@ -603,3 +603,25 @@ class TestHooks:
             _ = pytestconfig.hook.pytest_report_from_serializable(
                 config=pytestconfig, data=data
             )
+
+
+def test_subtest_timing_unaffected_by_mocked_time(pytester: Pytester) -> None:
+    """Subtests use _pytest.timing, so mocking `time` does not affect durations."""
+    pytester.makepyfile(
+        """
+        import time
+
+        def test_it(subtests, monkeypatch):
+            with subtests.test(msg="frozen clock"):
+                monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                monkeypatch.setattr("time.time", lambda: 0.0)
+        """
+    )
+    reprec = pytester.inline_run()
+    reports = [
+        r for r in reprec.getreports("pytest_runtest_logreport") if r.when == "call"
+    ]
+    assert reports
+    for report in reports:
+        assert report.duration >= 0
+        assert report.stop >= report.start > 0

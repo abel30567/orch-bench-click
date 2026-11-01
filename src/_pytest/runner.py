@@ -296,12 +296,8 @@ class CallInfo(Generic[TResult]):
     _result: TResult | None
     #: The captured exception of the call, if it raised.
     excinfo: ExceptionInfo[BaseException] | None
-    #: The system time when the call started, in seconds since the epoch.
-    start: float
-    #: The system time when the call ended, in seconds since the epoch.
-    stop: float
-    #: The call duration, in seconds.
-    duration: float
+    #: The measured time span of the call.
+    _duration: timing.Duration
     #: The context of invocation: "collect", "setup", "call" or "teardown".
     when: Literal["collect", "setup", "call", "teardown"]
 
@@ -309,9 +305,7 @@ class CallInfo(Generic[TResult]):
         self,
         result: TResult | None,
         excinfo: ExceptionInfo[BaseException] | None,
-        start: float,
-        stop: float,
-        duration: float,
+        duration: timing.Duration,
         when: Literal["collect", "setup", "call", "teardown"],
         *,
         _ispytest: bool = False,
@@ -319,10 +313,43 @@ class CallInfo(Generic[TResult]):
         check_ispytest(_ispytest)
         self._result = result
         self.excinfo = excinfo
-        self.start = start
-        self.stop = stop
-        self.duration = duration
+        self._duration = duration
         self.when = when
+
+    @property
+    def start(self) -> float:
+        """The system time when the call started, in seconds since the epoch."""
+        return self._duration.start.time
+
+    @start.setter
+    def start(self, value: float) -> None:
+        self._duration = timing.Duration(
+            start=self._duration.start._replace(time=value), stop=self._duration.stop
+        )
+
+    @property
+    def stop(self) -> float:
+        """The system time when the call ended, in seconds since the epoch."""
+        return self._duration.stop.time
+
+    @stop.setter
+    def stop(self, value: float) -> None:
+        self._duration = timing.Duration(
+            start=self._duration.start, stop=self._duration.stop._replace(time=value)
+        )
+
+    @property
+    def duration(self) -> float:
+        """The call duration, in seconds."""
+        return self._duration.seconds
+
+    @duration.setter
+    def duration(self, value: float) -> None:
+        start = self._duration.start
+        self._duration = timing.Duration(
+            start=start,
+            stop=self._duration.stop._replace(perf_count=start.perf_count + value),
+        )
 
     @property
     def result(self) -> TResult:
@@ -366,9 +393,7 @@ class CallInfo(Generic[TResult]):
             result = None
         duration = instant.elapsed()
         return cls(
-            start=duration.start.time,
-            stop=duration.stop.time,
-            duration=duration.seconds,
+            duration=duration,
             when=when,
             result=result,
             excinfo=excinfo,
