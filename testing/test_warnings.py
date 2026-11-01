@@ -1066,6 +1066,51 @@ class TestMaxWarnings:
         assert result.ret == ExitCode.MAX_WARNINGS_ERROR
 
     @pytest.mark.filterwarnings("default::UserWarning")
+    @pytest.mark.parametrize(
+        ("filename", "section"),
+        [("pytest.toml", "[pytest]"), ("pyproject.toml", "[tool.pytest]")],
+    )
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("0", ExitCode.MAX_WARNINGS_ERROR),
+            ("1", ExitCode.MAX_WARNINGS_ERROR),
+            ("2", ExitCode.OK),
+            ('"0"', ExitCode.MAX_WARNINGS_ERROR),
+            ('"2"', ExitCode.OK),
+            ('""', ExitCode.OK),
+        ],
+    )
+    def test_max_warnings_toml_option(
+        self,
+        pytester: Pytester,
+        filename: str,
+        section: str,
+        value: str,
+        expected: ExitCode,
+    ) -> None:
+        """max_warnings accepts native TOML integers as well as strings (#14954)."""
+        pytester.path.joinpath(filename).write_text(
+            f"{section}\nmax_warnings = {value}\n", encoding="utf-8"
+        )
+        pytester.makepyfile(self.PYFILE)
+        result = pytester.runpytest()
+        assert result.ret == expected
+        if expected == ExitCode.MAX_WARNINGS_ERROR:
+            limit = value.strip('"')
+            result.stdout.fnmatch_lines(
+                [f"*maximum allowed warnings exceeded: 2 > {limit}*"]
+            )
+
+    @pytest.mark.filterwarnings("default::UserWarning")
+    def test_max_warnings_ini_zero(self, pytester: Pytester) -> None:
+        """max_warnings = 0 in INI is an explicit threshold, not unset."""
+        pytester.makeini("[pytest]\nmax_warnings = 0\n")
+        pytester.makepyfile(self.PYFILE)
+        result = pytester.runpytest()
+        assert result.ret == ExitCode.MAX_WARNINGS_ERROR
+
+    @pytest.mark.filterwarnings("default::UserWarning")
     def test_max_warnings_with_test_failure(self, pytester: Pytester) -> None:
         """When tests fail AND warnings exceed max, TESTS_FAILED takes priority."""
         pytester.makepyfile(

@@ -1092,8 +1092,12 @@ class TerminalReporter:
         value = self.config.option.max_warnings
         if value is not None:
             return int(value)
-        ini_value = self.config.getini("max_warnings")
-        if ini_value:
+        ini_value: int | str = self.config.getini("max_warnings")
+        if isinstance(ini_value, int):
+            # Native TOML integer (or a string coerced to int); 0 is a valid
+            # threshold, distinct from the empty value meaning "unset".
+            return ini_value
+        if ini_value.strip():
             return int(ini_value)
         return None
 
