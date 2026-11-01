@@ -1,0 +1,1 @@
+:confval:`truncation_limit_lines` and :confval:`truncation_limit_chars` now accept integer values in native TOML configuration files (``[tool.pytest]`` in ``pyproject.toml``, or ``pytest.toml``), instead of raising a :class:`TypeError`. String values are still accepted for backward compatibility.
