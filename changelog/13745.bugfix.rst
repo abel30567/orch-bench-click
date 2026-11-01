@@ -1,0 +1,3 @@
+Fixture discovery now accepts subclasses of the internal fixture definition type, so plugins can customize fixture definitions.
+
+pytest now also emits a :class:`~pytest.PytestWarning` for fixtures it cannot discover because they are hidden behind another decorator (a custom decorator using :func:`functools.wraps`, or ``@classmethod`` placed above ``@pytest.fixture``). It also warns when ``@staticmethod`` is placed above ``@pytest.fixture``; that fixture is still discovered. Put ``@pytest.fixture`` as the outermost decorator.
