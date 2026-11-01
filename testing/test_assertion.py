@@ -1840,6 +1840,58 @@ class TestTruncateExplanation:
                 ]
             )
 
+    @pytest.mark.parametrize("value", ["0", '"0"'])
+    def test_truncation_limits_in_toml(
+        self, monkeypatch, pytester: Pytester, value: str
+    ) -> None:
+        """Truncation limits accept native TOML integers and strings (#14692)."""
+        pytester.makepyfile(
+            """\
+            def test_many_lines():
+                a = list([str(i)[0] * 100 for i in range(150)])
+                b = a[::2]
+                assert a == b
+            """
+        )
+        monkeypatch.delenv("CI", raising=False)
+        pytester.makefile(
+            ".toml",
+            pytest=f"""\
+            [pytest]
+            truncation_limit_lines = {value}
+            truncation_limit_chars = {value}
+            """,
+        )
+        result = pytester.runpytest()
+        result.stdout.no_fnmatch_line("*truncated*")
+        result.stdout.no_fnmatch_line("*TypeError*")
+        result.assert_outcomes(failed=1)
+
+    def test_truncation_limits_in_toml_positive_int(
+        self, monkeypatch, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
+            """\
+            string_a = "123456789\\n23456789\\n3"
+            string_b = "123456789\\n23456789\\n4"
+
+            def test():
+                assert string_a == string_b
+            """
+        )
+        monkeypatch.delenv("CI", raising=False)
+        pytester.makefile(
+            ".toml",
+            pytest="""\
+            [pytest]
+            truncation_limit_lines = 1
+            truncation_limit_chars = 8
+            """,
+        )
+        result = pytester.runpytest()
+        result.stdout.fnmatch_lines(["*Full output truncated*"])
+        result.assert_outcomes(failed=1)
+
 
 class TestMaterializeWithTruncation:
     """Tests for ``truncate.materialize_with_truncation``."""
