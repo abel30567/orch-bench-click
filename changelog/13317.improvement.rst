@@ -1,0 +1,5 @@
+Subclasses of the internal fixture definition type are now discovered as fixtures by ``parsefactories``.
+
+pytest now emits a :class:`~pytest.PytestWarning` when it cannot discover a fixture because it is hidden behind another decorator
+(e.g. a custom decorator using :func:`functools.wraps`, or ``@classmethod`` applied above ``@pytest.fixture``).
+Applying ``@staticmethod`` above ``@pytest.fixture`` still works but now warns; place ``@pytest.fixture`` above ``@staticmethod`` instead.

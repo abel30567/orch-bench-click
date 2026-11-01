@@ -1748,3 +1748,148 @@ def test_collection_hierarchy(pytester: Pytester) -> None:
         ],
         consecutive=True,
     )
+
+
+def test_fixture_definition_subclass_is_discovered(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        from _pytest.fixtures import FixtureFunctionDefinition, FixtureFunctionMarker
+
+        class MyDefinition(FixtureFunctionDefinition):
+            pass
+
+        def _make():
+            return 42
+
+        marker = FixtureFunctionMarker(
+            scope="function", params=None, name="answer", _ispytest=True
+        )
+        answer = MyDefinition(
+            function=_make, fixture_function_marker=marker, _ispytest=True
+        )
+
+        class TestIt:
+            sub = MyDefinition(
+                function=lambda self: self,
+                fixture_function_marker=FixtureFunctionMarker(
+                    scope="function", params=None, name="me", _ispytest=True
+                ),
+                _ispytest=True,
+            )
+
+            def test_method(self, me):
+                assert me is self
+
+        def test_answer(answer):
+            assert answer == 42
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=2)
+
+
+def test_fixture_wrapped_in_decorator_warns(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import functools
+        import pytest
+
+        def deco(f):
+            @functools.wraps(f)
+            def wrapper(*args, **kwargs):
+                return f(*args, **kwargs)
+            return wrapper
+
+        @deco
+        @pytest.fixture
+        def fix():
+            return 1
+
+        def test_it(fix):
+            pass
+        """
+    )
+    result = pytester.runpytest("-Wdefault::pytest.PytestWarning")
+    result.stdout.fnmatch_lines(
+        [
+            "*fixture 'fix' not found",
+            "*PytestWarning: cannot discover fixture 'fix' due to being wrapped in decorators",
+        ]
+    )
+    result.assert_outcomes(errors=1, warnings=1)
+
+
+def test_fixture_below_classmethod_warns(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        class TestIt:
+            @classmethod
+            @pytest.fixture
+            def fix(cls):
+                return 1
+
+            def test_it(self, fix):
+                pass
+        """
+    )
+    result = pytester.runpytest("-Wdefault::pytest.PytestWarning")
+    result.stdout.fnmatch_lines(
+        [
+            "*fixture 'fix' not found",
+            "*PytestWarning: cannot discover fixture 'fix' because it is wrapped by "
+            "@classmethod; place @pytest.fixture above @classmethod",
+        ]
+    )
+    result.assert_outcomes(errors=1, warnings=1)
+
+
+def test_fixture_below_staticmethod_warns(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        class TestIt:
+            @staticmethod
+            @pytest.fixture
+            def fix():
+                return 1
+
+            def test_it(self, fix):
+                assert fix == 1
+        """
+    )
+    result = pytester.runpytest("-Wdefault::pytest.PytestWarning")
+    result.stdout.fnmatch_lines(
+        [
+            "*PytestWarning: fixture 'fix' is wrapped by @staticmethod above "
+            "@pytest.fixture; place @pytest.fixture above @staticmethod",
+        ]
+    )
+    result.assert_outcomes(passed=1, warnings=1)
+
+
+def test_fixture_above_classmethod_and_staticmethod(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        class TestIt:
+            @pytest.fixture
+            @classmethod
+            def cfix(cls):
+                return cls
+
+            @pytest.fixture
+            @staticmethod
+            def sfix():
+                return 2
+
+            def test_it(self, cfix, sfix):
+                assert cfix is TestIt
+                assert sfix == 2
+        """
+    )
+    result = pytester.runpytest("-Werror")
+    result.assert_outcomes(passed=1)

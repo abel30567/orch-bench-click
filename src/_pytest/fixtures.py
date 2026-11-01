@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+import copy
 import dataclasses
 import functools
 import inspect
@@ -29,6 +30,7 @@ from typing import Literal
 from typing import NoReturn
 from typing import overload
 from typing import TYPE_CHECKING
+from typing import TypeGuard
 from typing import TypeVar
 import warnings
 
@@ -76,6 +78,7 @@ from _pytest.scope import HIGH_SCOPES
 from _pytest.scope import Scope
 from _pytest.scope import ScopeName
 from _pytest.warning_types import PytestWarning
+from _pytest.warning_types import warn_explicit_for
 
 
 if sys.version_info < (3, 11):
@@ -1382,6 +1385,43 @@ class FixtureFunctionMarker:
         return fixture_definition
 
 
+def _is_fixture_definition(
+    obj: object,
+) -> TypeGuard[FixtureFunctionDefinition]:
+    """Like ``isinstance(obj, FixtureFunctionDefinition)`` (so subclasses are
+    accepted), but robust against objects raising on ``__class__`` access
+    (e.g. Django's LazySettings, #4266)."""
+    return issubclass(type(obj), FixtureFunctionDefinition)
+
+
+def _find_wrapped_fixture_definition(
+    obj: object,
+) -> FixtureFunctionDefinition | None:
+    """Return a FixtureFunctionDefinition hidden behind ``__wrapped__`` chains
+    of plain functions (e.g. decorators using :func:`functools.wraps`)."""
+    current: object = obj
+    seen: set[int] = set()
+    while type(current) is types.FunctionType and id(current) not in seen:
+        seen.add(id(current))
+        current = current.__dict__.get("__wrapped__")
+        if _is_fixture_definition(current):
+            return current
+    return None
+
+
+def _warn_fixture_definition(
+    definition: FixtureFunctionDefinition, message: str
+) -> None:
+    """Issue a PytestWarning pointing at the fixture function definition."""
+    warning = PytestWarning(message)
+    func = get_real_func(definition._get_wrapped_function())
+    func = getattr(func, "__func__", func)
+    if isinstance(func, types.FunctionType):
+        warn_explicit_for(func, warning)
+    else:
+        warnings.warn(warning, stacklevel=3)
+
+
 # TODO: paramspec/return type annotation tracking and storing
 class FixtureFunctionDefinition:
     def __init__(
@@ -1411,12 +1451,19 @@ class FixtureFunctionDefinition:
 
     def __get__(self, instance, owner=None):
         """Behave like a method if the function it was applied to was a method."""
-        return FixtureFunctionDefinition(
-            function=self._fixture_function,
-            fixture_function_marker=self._fixture_function_marker,
-            instance=instance,
-            _ispytest=True,
-        )
+        # Copy rather than re-instantiate so that subclasses are preserved.
+        bound = copy.copy(self)
+        if isinstance(self._fixture_function, (staticmethod, classmethod)):
+            # Resolve even on class access, so the fixture function is never
+            # re-bound to a test instance later on.
+            bound._fixture_function = self._fixture_function.__get__(
+                instance, owner if owner is not None else type(instance)
+            )
+        elif instance is not None:
+            bound._fixture_function = cast(
+                Callable[..., Any], self._fixture_function.__get__(instance)
+            )
+        return bound
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         message = (
@@ -2105,32 +2152,69 @@ class FixtureManager:
             # The attribute can be an arbitrary descriptor, so the attribute
             # access below can raise. safe_getattr() ignores such exceptions.
             obj_ub = safe_getattr(holderobj_tp, name, None)
-            if type(obj_ub) is FixtureFunctionDefinition:
-                marker = obj_ub._fixture_function_marker
-                if marker.name:
-                    fixture_name = marker.name
-                else:
-                    fixture_name = name
 
-                # OK we know it is a fixture -- now safe to look up on the _instance_.
-                try:
-                    obj = getattr(holderobj, name)
-                # if the fixture is named in the decorator we cannot find it in the module
-                except AttributeError:
-                    obj = obj_ub
+            # Detect fixtures hidden behind @classmethod/@staticmethod, which
+            # need to be checked on the raw (non-descriptor-resolved) attribute.
+            try:
+                raw = inspect.getattr_static(holderobj_tp, name, None)
+            except Exception:
+                raw = None
+            if issubclass(type(raw), (classmethod, staticmethod)):
+                inner = safe_getattr(raw, "__func__", None)
+                if _is_fixture_definition(inner):
+                    fixture_name = inner._fixture_function_marker.name or name
+                    if issubclass(type(raw), classmethod):
+                        _warn_fixture_definition(
+                            inner,
+                            f"cannot discover fixture {fixture_name!r} because it is "
+                            "wrapped by @classmethod; "
+                            "place @pytest.fixture above @classmethod",
+                        )
+                        continue
+                    _warn_fixture_definition(
+                        inner,
+                        f"fixture {fixture_name!r} is wrapped by @staticmethod "
+                        "above @pytest.fixture; "
+                        "place @pytest.fixture above @staticmethod",
+                    )
+                    obj_ub = inner
 
-                func = obj._get_wrapped_function()
+            if not _is_fixture_definition(obj_ub):
+                hidden = _find_wrapped_fixture_definition(obj_ub)
+                if hidden is not None:
+                    fixture_name = hidden._fixture_function_marker.name or name
+                    _warn_fixture_definition(
+                        hidden,
+                        f"cannot discover fixture {fixture_name!r} "
+                        "due to being wrapped in decorators",
+                    )
+                continue
 
-                self._register_fixture(
-                    name=fixture_name,
-                    func=func,
-                    scope=marker.scope,
-                    params=marker.params,
-                    ids=marker.ids,
-                    autouse=marker.autouse,
-                    node=effective_node,
-                    nodeid=effective_nodeid,
-                )
+            marker = obj_ub._fixture_function_marker
+            if marker.name:
+                fixture_name = marker.name
+            else:
+                fixture_name = name
+
+            # OK we know it is a fixture -- now safe to look up on the _instance_.
+            try:
+                obj = getattr(holderobj, name)
+            # if the fixture is named in the decorator we cannot find it in the module
+            except AttributeError:
+                obj = obj_ub
+
+            func = obj._get_wrapped_function()
+
+            self._register_fixture(
+                name=fixture_name,
+                func=func,
+                scope=marker.scope,
+                params=marker.params,
+                ids=marker.ids,
+                autouse=marker.autouse,
+                node=effective_node,
+                nodeid=effective_nodeid,
+            )
 
     def getfixturedefs(
         self, argname: str, node: nodes.Node
