@@ -1,0 +1,1 @@
+Added validation of ``-m`` expressions: with ``--strict-markers`` (or ``strict``), unknown markers in the expression now raise a usage error.

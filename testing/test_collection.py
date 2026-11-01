@@ -2797,3 +2797,42 @@ def test_strict_parametrization_ids_with_hidden_param(pytester: Pytester) -> Non
             "Duplicates:     a",
         ]
     )
+
+
+@pytest.mark.parametrize("option", ["--strict-markers", "--strict"])
+def test_strict_markers_unknown_mark_expression(
+    pytester: Pytester, option: str
+) -> None:
+    pytester.makeini(
+        """
+        [pytest]
+        markers =
+            foo: a registered marker
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.foo
+        def test_a():
+            pass
+        """
+    )
+    result = pytester.runpytest(option, "-m", "foo")
+    result.assert_outcomes(passed=1)
+    result = pytester.runpytest(option, "-m", "not foo and (bar or baz(x=1))")
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["*Unknown marker(s) in '-m' expression: bar, baz*"]
+    )
+    # Non-strict mode keeps the old behavior.
+    result = pytester.runpytest("-m", "bar")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
+
+
+def test_expression_idents() -> None:
+    from _pytest.mark.expression import Expression
+
+    expr = Expression.compile("not a and (b or c(x=1, y='z'))")
+    assert expr.idents() == frozenset({"a", "b", "c"})
