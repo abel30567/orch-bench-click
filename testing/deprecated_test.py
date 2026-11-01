@@ -6,6 +6,7 @@ from _pytest.pytester import Pytester
 from _pytest.scope import Scope
 import pytest
 from pytest import PytestDeprecationWarning
+from pytest import PytestRemovedIn10Warning
 
 
 @pytest.mark.parametrize("plugin", sorted(deprecated.DEPRECATED_EXTERNAL_PLUGINS))
@@ -364,3 +365,25 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+def test_string_ini_option_non_string_value_deprecated(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("strip", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        strip = ["a", "b"]
+        """
+    )
+    config = pytester.parseconfig()
+    with pytest.warns(
+        PytestRemovedIn10Warning,
+        match=r"^Passing a value that is not a string to a 'string'-typed ini option",
+    ):
+        value = config.getini("strip")
+    assert value == ["a", "b"]

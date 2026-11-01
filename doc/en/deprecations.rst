@@ -15,6 +15,18 @@ Below is a complete list of all pytest features which are considered deprecated.
 :class:`~pytest.PytestWarning` or subclasses, which can be filtered using :ref:`standard warning filters <warnings>`.
 
 
+.. _ini-string-non-string-value:
+
+Non-string values for ``string`` ini options
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 9.1
+
+In the ``[tool.pytest.ini_options]`` table, setting a ``string``-typed option to a
+non-string value (such as an array) is deprecated. The value is currently returned
+as-is, but this will raise a :class:`TypeError` in pytest 10.
+
+
 .. _callspec2-renamed:
 
 ``_pytest.python.CallSpec2`` renamed to ``CallSpec``
