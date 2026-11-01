@@ -1,0 +1,1 @@
+Improved reporting performance for tests that fail with a :class:`RecursionError` whose origin cannot be located: the traceback is now truncated to the first and last 10 frames (use ``--full-trace`` to see all frames), and statement line numbers are cached per AST node.

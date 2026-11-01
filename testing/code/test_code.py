@@ -225,3 +225,36 @@ def test_ExceptionChainRepr():
     assert isinstance(repr1, ExceptionChainRepr)
     assert hash(repr1) != hash(repr2)
     assert repr1 is not excinfo1.getrepr()
+
+
+def test_statement_linenos_memoized() -> None:
+    import ast
+
+    from _pytest._code.source import _statement_linenos
+    from _pytest._code.source import get_statement_startend2
+
+    node = ast.parse("x = 1\ny = 2\n\nz = 3\n")
+    first = _statement_linenos(node)
+    assert first == [0, 1, 3]
+    assert _statement_linenos(node) is first
+    assert get_statement_startend2(1, node) == (1, 3)
+
+
+def test_truncate_recursive_traceback_without_origin(pytester) -> None:
+    pytester.makepyfile(
+        """
+        def f(x):
+            f(x + 1)
+
+        def test_it():
+            f(0)
+        """
+    )
+    result = pytester.runpytest()
+    result.stdout.fnmatch_lines(
+        [
+            "!!! Recursion error detected, but the origin of the recursion could not be located.",
+            "  Displaying first and last 10 stack frames out of *.",
+            "  Pass `--full-trace` to see all frames.",
+        ]
+    )
