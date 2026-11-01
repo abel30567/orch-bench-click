@@ -1,6 +1,8 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import warnings
+
 from _pytest import deprecated
 from _pytest.pytester import Pytester
 from _pytest.scope import Scope
@@ -364,3 +366,51 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+class TestIniStringNonStringValue:
+    CONFTEST = """
+        def pytest_addoption(parser):
+            parser.addini("strparam", "", type="string")
+    """
+
+    def test_ini_options_list_is_deprecated(self, pytester: Pytester) -> None:
+        pytester.makeconftest(self.CONFTEST)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            strparam = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.warns(
+            pytest.PytestRemovedIn10Warning,
+            match=r"^Passing a value that is not a string to a 'string'-typed ini option",
+        ):
+            value = config.getini("strparam")
+        assert value == ["a", "b"]
+
+    def test_ini_options_string_not_deprecated(self, pytester: Pytester) -> None:
+        pytester.makeconftest(self.CONFTEST)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest.ini_options]
+            strparam = "a b"
+            """
+        )
+        config = pytester.parseconfig()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert config.getini("strparam") == "a b"
+
+    def test_native_toml_list_still_errors(self, pytester: Pytester) -> None:
+        pytester.makeconftest(self.CONFTEST)
+        pytester.makepyprojecttoml(
+            """
+            [tool.pytest]
+            strparam = ["a", "b"]
+            """
+        )
+        config = pytester.parseconfig()
+        with pytest.raises(pytest.UsageError, match="expects a string"):
+            config.getini("strparam")

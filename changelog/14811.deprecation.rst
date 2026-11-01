@@ -1,0 +1,1 @@
+In the ``[tool.pytest.ini_options]`` table of ``pyproject.toml``, passing a value that is not a string (such as a TOML array) to a ``string``-typed configuration option is now deprecated and issues a ``PytestRemovedIn10Warning`` -- see :ref:`ini-string-non-string-value`.
