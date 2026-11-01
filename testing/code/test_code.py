@@ -225,3 +225,80 @@ def test_ExceptionChainRepr():
     assert isinstance(repr1, ExceptionChainRepr)
     assert hash(repr1) != hash(repr2)
     assert repr1 is not excinfo1.getrepr()
+
+
+def _unbounded_recursion(x: int) -> None:
+    _unbounded_recursion(x + 1)
+
+
+def _recursion_excinfo() -> ExceptionInfo[RecursionError]:
+    before = sys.getrecursionlimit()
+    sys.setrecursionlimit(150)
+    try:
+        with pytest.raises(RecursionError) as excinfo:
+            _unbounded_recursion(0)
+    finally:
+        sys.setrecursionlimit(before)
+    return excinfo
+
+
+def test_truncate_recursive_traceback_without_origin() -> None:
+    """Recursion with no repeating locals is truncated to the first and last
+    10 frames (#14903)."""
+    from _pytest._code.code import ExceptionInfoFormatter
+
+    excinfo = _recursion_excinfo()
+    traceback = excinfo.traceback
+    assert traceback.recursionindex() is None
+    n = len(traceback)
+    assert n > 20
+
+    fmt = ExceptionInfoFormatter(tbfilter=True)
+    truncated, extraline = fmt._truncate_recursive_traceback(traceback)
+    assert len(truncated) == 20
+    assert list(truncated) == list(traceback[:10]) + list(traceback[-10:])
+    assert extraline == (
+        "!!! Recursion error detected, but the origin of the recursion could not be located.\n"
+        f"  Displaying first and last 10 stack frames out of {n}.\n"
+        "  Pass `--full-trace` to see all frames."
+    )
+
+    reprtb = fmt.repr_traceback(excinfo)
+    assert len(reprtb.reprentries) == 20
+
+
+def test_truncate_recursive_traceback_full_trace() -> None:
+    from _pytest._code.code import ExceptionInfoFormatter
+
+    excinfo = _recursion_excinfo()
+    traceback = excinfo.traceback
+    fmt = ExceptionInfoFormatter(tbfilter=False)
+    truncated, extraline = fmt._truncate_recursive_traceback(traceback)
+    assert extraline is None
+    assert len(truncated) == len(traceback)
+
+
+def test_truncate_recursive_traceback_short() -> None:
+    from _pytest._code.code import ExceptionInfoFormatter
+    from _pytest._code.code import Traceback
+
+    excinfo = _recursion_excinfo()
+    short = Traceback(list(excinfo.traceback)[:20])
+    fmt = ExceptionInfoFormatter(tbfilter=True)
+    truncated, extraline = fmt._truncate_recursive_traceback(short)
+    assert extraline is None
+    assert len(truncated) == 20
+
+
+def test_statement_linenos_memoized() -> None:
+    import ast
+
+    from _pytest._code.source import _statement_linenos
+    from _pytest._code.source import get_statement_startend2
+
+    node = ast.parse("@dec\ndef f():\n    x = 1\n    y = 2\nz = 3\n")
+    first = _statement_linenos(node)
+    assert first == [0, 1, 2, 3, 4]
+    assert _statement_linenos(node) is first
+    assert get_statement_startend2(2, node) == (2, 3)
+    assert get_statement_startend2(4, node) == (4, None)
