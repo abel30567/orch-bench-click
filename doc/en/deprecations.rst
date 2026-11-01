@@ -20,7 +20,7 @@ Below is a complete list of all pytest features which are considered deprecated.
 Non-string values for ``string``-typed options in ``[tool.pytest.ini_options]``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 9.1
+.. deprecated:: 9.2
 
 In the ``[tool.pytest.ini_options]`` table of ``pyproject.toml``, a non-string value
 (such as a TOML array) given to an option registered with ``type="string"`` was silently
