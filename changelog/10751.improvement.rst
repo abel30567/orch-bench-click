@@ -1,0 +1,1 @@
+Improved performance of reporting ``RecursionError`` failures whose origin cannot be located: the traceback is now truncated to the first and last 10 frames (pass ``--full-trace`` to see all frames), and statement line numbers of parsed source files are memoized.
