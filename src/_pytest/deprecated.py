@@ -96,6 +96,14 @@ PASTEBIN = PytestRemovedIn10Warning(
     "See https://docs.pytest.org/en/stable/deprecations.html#the-pastebin-option"
 )
 
+INI_STRING_NON_STRING_VALUE = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    "Passing a value that is not a string to a 'string'-typed ini option is deprecated.\n"
+    "Option {name!r} got {type_name}: {value!r}\n"
+    "This will become an error in pytest 10.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#ini-string-non-string-value",
+)
+
 # You want to make some `__init__` or function "private".
 #
 #   def my_private_function(some, args):
