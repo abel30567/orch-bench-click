@@ -1,6 +1,9 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
+import traceback
+import warnings
+
 from _pytest import deprecated
 from _pytest.pytester import Pytester
 from _pytest.scope import Scope
@@ -95,6 +98,32 @@ def test_private_is_deprecated() -> None:
 
     # Doesn't warn.
     PrivateInit(10, _ispytest=True)
+
+
+def test_deprecation_constants_are_unformatted_warnings() -> None:
+    """Module-level warning instances would be shared across raises under
+    ``-W error`` and accumulate tracebacks; every constant must produce a
+    fresh warning instance instead (#14931)."""
+    for name, value in vars(deprecated).items():
+        assert not isinstance(value, Warning), name
+
+
+def test_private_warning_does_not_accumulate_traceback() -> None:
+    class PrivateInit:
+        def __init__(self, *, _ispytest: bool = False) -> None:
+            deprecated.check_ispytest(_ispytest)
+
+    raised = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PytestDeprecationWarning)
+        for _ in range(3):
+            with pytest.raises(PytestDeprecationWarning) as excinfo:
+                PrivateInit()
+            raised.append(excinfo.value)
+
+    assert len({id(e) for e in raised}) == 3
+    depths = [len(traceback.extract_tb(e.__traceback__)) for e in raised]
+    assert depths[0] == depths[1] == depths[2]
 
 
 @pytest.mark.parametrize(
