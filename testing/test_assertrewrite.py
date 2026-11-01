@@ -1327,10 +1327,11 @@ class TestAssertionRewriteHookDetails:
         source_path = str(tmp_path)
         pycpath = tmp_path.joinpath("pyc")
         co = compile("1", "f.py", "single")
-        assert _write_pyc(state, co, os.stat(source_path), pycpath)
+        source_hash = importlib.util.source_hash(b"")
+        assert _write_pyc(state, co, source_hash, pycpath)
 
         with mock.patch.object(os, "replace", side_effect=OSError):
-            assert not _write_pyc(state, co, os.stat(source_path), pycpath)
+            assert not _write_pyc(state, co, source_hash, pycpath)
 
     def test_resources_provider_for_loader(self, pytester: Pytester) -> None:
         """
@@ -1403,8 +1404,9 @@ class TestAssertionRewriteHookDetails:
 
         fn.write_text("def test(): assert True", encoding="utf-8")
 
-        source_stat, co = _rewrite_test(fn, config)
-        _write_pyc(state, co, source_stat, pyc)
+        source_hash, co = _rewrite_test(fn, config)
+        assert source_hash == importlib.util.source_hash(fn.read_bytes())
+        _write_pyc(state, co, source_hash, pyc)
         assert _read_pyc(fn, pyc, state.trace) is not None
 
     def test_read_pyc_more_invalid(self, tmp_path: Path) -> None:
@@ -1418,39 +1420,89 @@ class TestAssertionRewriteHookDetails:
 
         magic = importlib.util.MAGIC_NUMBER
 
-        flags = b"\x00\x00\x00\x00"
+        flags = b"\x03\x00\x00\x00"
 
-        mtime = b"\x58\x3c\xb0\x5f"
-        mtime_int = int.from_bytes(mtime, "little")
-        os.utime(source, (mtime_int, mtime_int))
-
-        size = len(source_bytes).to_bytes(4, "little")
+        source_hash = importlib.util.source_hash(source_bytes)
 
         code = marshal.dumps(compile(source_bytes, str(source), "exec"))
 
         # Good header.
-        pyc.write_bytes(magic + flags + mtime + size + code)
+        pyc.write_bytes(magic + flags + source_hash + code)
         assert _read_pyc(source, pyc, print) is not None
 
         # Too short.
-        pyc.write_bytes(magic + flags + mtime)
+        pyc.write_bytes(magic + flags + source_hash[:4])
         assert _read_pyc(source, pyc, print) is None
 
         # Bad magic.
-        pyc.write_bytes(b"\x12\x34\x56\x78" + flags + mtime + size + code)
+        pyc.write_bytes(b"\x12\x34\x56\x78" + flags + source_hash + code)
         assert _read_pyc(source, pyc, print) is None
 
-        # Unsupported flags.
-        pyc.write_bytes(magic + b"\x00\xff\x00\x00" + mtime + size + code)
+        # Unsupported flags (e.g. timestamp-based pyc).
+        pyc.write_bytes(magic + b"\x00\x00\x00\x00" + source_hash + code)
+        assert _read_pyc(source, pyc, print) is None
+        pyc.write_bytes(magic + b"\x00\xff\x00\x00" + source_hash + code)
         assert _read_pyc(source, pyc, print) is None
 
-        # Bad mtime.
-        pyc.write_bytes(magic + flags + b"\x58\x3d\xb0\x5f" + size + code)
+        # Bad source hash.
+        bad_hash = importlib.util.source_hash(b"def test(): fail\n")
+        assert bad_hash != source_hash
+        pyc.write_bytes(magic + flags + bad_hash + code)
         assert _read_pyc(source, pyc, print) is None
 
-        # Bad size.
-        pyc.write_bytes(magic + flags + mtime + b"\x99\x00\x00\x00" + code)
-        assert _read_pyc(source, pyc, print) is None
+    def test_read_pyc_source_changed_same_mtime_and_size(
+        self, tmp_path: Path, pytester: Pytester
+    ) -> None:
+        """A cached pyc must be invalidated when the source changes, even if
+        mtime and size stay the same (#14905)."""
+        from _pytest.assertion import AssertionState
+        from _pytest.assertion.rewrite import _read_pyc
+        from _pytest.assertion.rewrite import _rewrite_test
+        from _pytest.assertion.rewrite import _write_pyc
+
+        config = pytester.parseconfig()
+        state = AssertionState(config, "rewrite")
+
+        fn = tmp_path / "source.py"
+        pyc = Path(str(fn) + "c")
+
+        fn.write_text("def test_dummy1(): pass\n", encoding="utf-8")
+        st = os.stat(fn)
+        source_hash, co = _rewrite_test(fn, config)
+        assert _write_pyc(state, co, source_hash, pyc)
+        assert _read_pyc(fn, pyc, state.trace) is not None
+
+        fn.write_text("def test_dummy2(): pass\n", encoding="utf-8")
+        os.utime(fn, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert os.stat(fn).st_size == st.st_size
+        assert _read_pyc(fn, pyc, state.trace) is None
+
+    def test_pyc_updated_when_source_rewritten_quickly(
+        self, pytester: Pytester
+    ) -> None:
+        """Regression test for #14905."""
+        pytester.makepyfile(
+            test_example="""
+            def test_dummy1():
+                def func():
+                    pass
+                print(func.__qualname__)
+            """
+        )
+        r = pytester.runpytest_subprocess("-s")
+        assert r.ret == 0
+        assert "test_example.py test_dummy1.<locals>.func" in r.stdout.str()
+        pytester.makepyfile(
+            test_example="""
+            def test_dummy2():
+                def func():
+                    pass
+                print(func.__qualname__)
+            """
+        )
+        r = pytester.runpytest_subprocess("-s")
+        assert r.ret == 0
+        assert "test_example.py test_dummy2.<locals>.func" in r.stdout.str()
 
     def test_reload_is_same_and_reloads(self, pytester: Pytester) -> None:
         """Reloading a (collected) module after change picks up the change."""

@@ -1,0 +1,1 @@
+Fixed assertion rewriting loading a stale cached ``.pyc`` when a test file was modified quickly without changing its size: the cache is now invalidated using a hash of the source instead of its modification time and size.
