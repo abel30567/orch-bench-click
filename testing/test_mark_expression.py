@@ -336,3 +336,18 @@ def test_str_keyword_expressions(
     expr: str, expected: bool, mark_matcher: MarkMatcher
 ) -> None:
     assert evaluate(expr, mark_matcher) is expected
+
+
+@pytest.mark.parametrize(
+    "expr, expected",
+    (
+        ("", frozenset()),
+        ("a", frozenset({"a"})),
+        ("a and not (b or c)", frozenset({"a", "b", "c"})),
+        ("True or None", frozenset({"True", "None"})),
+        ("mark(key=1, other='x') and a", frozenset({"mark", "a"})),
+        ("a or a", frozenset({"a"})),
+    ),
+)
+def test_idents(expr: str, expected: frozenset[str]) -> None:
+    assert Expression.compile(expr).idents() == expected

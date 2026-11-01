@@ -186,6 +186,102 @@ def test_mark_on_pseudo_function(pytester: Pytester) -> None:
 
 @pytest.mark.parametrize(
     "option",
+    ["--strict-markers", "--strict", "strict_markers = true", "strict = true"],
+)
+def test_strict_prohibits_unregistered_markers_in_m_expression(
+    pytester: Pytester, option: str
+) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+        @pytest.mark.registered
+        def test_hello():
+            pass
+    """
+    )
+    ini_lines = ["[pytest]", "markers =", "    registered: a registered mark"]
+    args = ["-m", "registered and (typo1 or not typo2(x=1))"]
+    if option.startswith("-"):
+        args.insert(0, option)
+    else:
+        ini_lines.insert(1, option)
+    pytester.makeini("\n".join(ini_lines))
+    result = pytester.runpytest(*args)
+    assert result.ret == ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["ERROR: Unknown marker(s) in '-m' expression: typo1, typo2"]
+    )
+
+
+@pytest.mark.parametrize(
+    "option", [None, "strict_markers = false", "strict = true\nstrict_markers = false"]
+)
+def test_unregistered_markers_in_m_expression_allowed_when_not_strict(
+    pytester: Pytester, option: str | None
+) -> None:
+    pytester.makepyfile(
+        """
+        def test_hello():
+            pass
+    """
+    )
+    if option is not None:
+        pytester.makeini(f"[pytest]\n{option}\n")
+    result = pytester.runpytest("-m", "typo")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
+    result.stdout.fnmatch_lines(["*1 deselected*"])
+
+
+def test_strict_m_expression_with_registered_markers(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+        @pytest.mark.slow
+        def test_slow():
+            pass
+        @pytest.mark.skip
+        def test_skipped():
+            pass
+        def test_other():
+            pass
+    """
+    )
+    pytester.makeini("[pytest]\nmarkers =\n    slow(arg): slow tests\n")
+    result = pytester.runpytest("--strict-markers", "-m", "slow or skip")
+    result.assert_outcomes(passed=1, skipped=1, deselected=1)
+
+
+def test_validate_marker_names(pytester: Pytester) -> None:
+    from _pytest.mark import _validate_marker_names
+    from _pytest.mark.expression import Expression
+
+    pytester.makeini("[pytest]\nmarkers =\n    good: a good mark\n")
+    config = pytester.parseconfig()
+    expr = Expression.compile("good or bad")
+    _validate_marker_names(expr, config)  # Not strict: no error.
+
+    config = pytester.parseconfig("--strict-markers")
+    _validate_marker_names(Expression.compile("good"), config)
+    with pytest.raises(
+        pytest.UsageError, match=r"Unknown marker\(s\) in '-m' expression: bad"
+    ):
+        _validate_marker_names(expr, config)
+
+
+def test_iter_registered_markers(pytester: Pytester) -> None:
+    from _pytest.config import RegisteredMarker
+
+    pytester.makeini("[pytest]\nmarkers =\n    a: desc\n    b(x, y): desc\n    c\n")
+    config = pytester.parseconfig()
+    markers = list(config._iter_registered_markers())
+    assert RegisteredMarker("a") in markers
+    assert RegisteredMarker("b") in markers
+    assert RegisteredMarker("c") in markers
+    assert all(isinstance(m, RegisteredMarker) for m in markers)
+
+
+@pytest.mark.parametrize(
+    "option",
     [
         "--strict-markers",
         "--strict",
