@@ -1,0 +1,1 @@
+Passing a non-string value (such as an array) to a ``string``-typed option in the ``[tool.pytest.ini_options]`` table is now deprecated and emits a :class:`~pytest.PytestRemovedIn10Warning`; it will become an error in pytest 10 -- see :ref:`ini-string-non-str-value`.
