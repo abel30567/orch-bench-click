@@ -2765,6 +2765,39 @@ def test_parse_warning_filter_failure(arg: str) -> None:
         parse_warning_filter(arg, escape=True)
 
 
+def test_warning_filters_applied_during_pytest_configure(pytester: Pytester) -> None:
+    """Warning filters from the config apply to warnings issued in conftest
+    pytest_configure hooks (#9729)."""
+    pytester.makeconftest(
+        """
+        import warnings
+
+        def pytest_configure(config):
+            warnings.warn("Some warning", UserWarning)
+        """
+    )
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings = error::UserWarning
+        """
+    )
+    pytester.makepyfile("def test_foo(): pass")
+    result = pytester.runpytest()
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*UserWarning: Some warning*"])
+
+    pytester.makeini(
+        """
+        [pytest]
+        filterwarnings = ignore::UserWarning
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == 0
+    assert "Some warning" not in result.stdout.str() + result.stderr.str()
+
+
 class TestDebugOptions:
     def test_without_debug_does_not_write_log(self, pytester: Pytester) -> None:
         result = pytester.runpytest()
