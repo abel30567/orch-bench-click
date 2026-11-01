@@ -1,0 +1,1 @@
+In the ``[tool.pytest.ini_options]`` table, passing a non-string value (e.g. an array) to a ``string``-typed ini option is now deprecated and emits :class:`~pytest.PytestRemovedIn10Warning`; it will become a :class:`TypeError` in pytest 10.
