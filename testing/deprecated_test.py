@@ -364,3 +364,24 @@ def test_callspec2_renamed() -> None:
 
     with pytest.warns(pytest.PytestRemovedIn10Warning, match="CallSpec2"):
         assert python_mod.CallSpec2 is CallSpec
+
+
+def test_ini_string_option_non_str_value_deprecated(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        def pytest_addoption(parser):
+            parser.addini("my_str", "", type="string")
+        """
+    )
+    pytester.makepyprojecttoml(
+        """
+        [tool.pytest.ini_options]
+        my_str = ["a", "b"]
+        """
+    )
+    config = pytester.parseconfig()
+    with pytest.warns(
+        pytest.PytestRemovedIn10Warning,
+        match=r"^Passing a value that is not a string to a 'string'-typed ini option",
+    ):
+        assert config.getini("my_str") == ["a", "b"]
