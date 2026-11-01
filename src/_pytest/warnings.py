@@ -129,6 +129,9 @@ def pytest_load_initial_conftests(
         return (yield)
 
 
+# tryfirst so the configured warning filters are already active when other
+# plugins' and conftests' ``pytest_configure`` hooks run.
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: Config) -> None:
     with ExitStack() as stack:
         stack.enter_context(

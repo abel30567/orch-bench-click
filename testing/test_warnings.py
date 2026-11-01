@@ -700,6 +700,49 @@ def test_pytest_configure_warning(pytester: Pytester, recwarn) -> None:
     assert str(warning.message) == "from pytest_configure"
 
 
+@pytest.mark.parametrize("via", ["ini", "cmdline"])
+def test_pytest_configure_warning_filtered(pytester: Pytester, via: str) -> None:
+    """Warning filters from config/cmdline apply to warnings issued in
+    conftest ``pytest_configure`` hooks."""
+    pytester.makeconftest(
+        """
+        import warnings
+
+        def pytest_configure(config):
+            warnings.warn("from conftest configure", UserWarning)
+        """
+    )
+    pytester.makepyfile("def test_a(): pass")
+    if via == "ini":
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = error::UserWarning
+            """
+        )
+        args: list[str] = []
+    else:
+        args = ["-W", "error::UserWarning"]
+    result = pytester.runpytest_subprocess(*args)
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*UserWarning: from conftest configure*"])
+
+    # And an "ignore" filter silences it.
+    if via == "ini":
+        pytester.makeini(
+            """
+            [pytest]
+            filterwarnings = ignore::UserWarning
+            """
+        )
+    else:
+        args = ["-W", "ignore::UserWarning"]
+    result = pytester.runpytest_subprocess(*args)
+    assert result.ret == 0
+    assert "from conftest configure" not in result.stderr.str()
+    assert "from conftest configure" not in result.stdout.str()
+
+
 class TestStackLevel:
     @pytest.fixture
     def capwarn(self, pytester: Pytester):
