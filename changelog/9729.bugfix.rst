@@ -1,0 +1,1 @@
+Warning filters configured via the ``filterwarnings`` ini option or ``-W`` are now applied before other plugins' and conftests' :hook:`pytest_configure` hooks run, so warnings issued there are filtered as expected.
