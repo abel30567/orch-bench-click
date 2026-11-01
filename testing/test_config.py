@@ -1145,6 +1145,30 @@ class TestConfigAPI:
         ):
             _ = config.getini("ini_param")
 
+    @pytest.mark.parametrize(
+        "section, value, expected",
+        [
+            ("[tool.pytest]", "0", 0),
+            ("[tool.pytest]", '"0"', "0"),
+            ("[tool.pytest.ini_options]", "0", 0),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "name", ["truncation_limit_lines", "truncation_limit_chars"]
+    )
+    def test_truncation_limits_accept_int(
+        self, pytester: Pytester, section: str, value: str, expected: object, name: str
+    ) -> None:
+        """Truncation limits accept native TOML ints."""
+        pytester.makepyprojecttoml(
+            f"""
+            {section}
+            {name} = {value}
+            """
+        )
+        config = pytester.parseconfig()
+        assert config.getini(name) == expected
+
     def test_addini_plain_type(self, pytester: Pytester) -> None:
         """A plain Python type is accepted as an alias of its string tag."""
         pytester.makeconftest(
