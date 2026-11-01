@@ -1096,3 +1096,30 @@ def test_serialization_xdist(pytester: pytest.Pytester) -> None:  # pragma: no c
     pytester.syspathinsert()
     result = pytester.runpytest("-n1", "-pxdist.plugin")
     result.assert_outcomes(passed=2)
+
+
+def test_subtest_timing_unaffected_by_mocked_time(pytester: pytest.Pytester) -> None:
+    """Subtest durations must use `_pytest.timing`, not `time` directly (#15298)."""
+    pytester.makepyfile(
+        """
+        import time
+
+        def test_with_subtest(subtests, monkeypatch):
+            real_sleep = time.sleep
+            with subtests.test(msg="frozen clock"):
+                monkeypatch.setattr("time.perf_counter", lambda: 0.0)
+                monkeypatch.setattr("time.time", lambda: 0.0)
+                real_sleep(0.05)
+        """
+    )
+    reprec = pytester.inline_run()
+    reports = [
+        r
+        for r in reprec.getreports("pytest_runtest_logreport")
+        if isinstance(r, SubtestReport)
+    ]
+    assert len(reports) == 1
+    (report,) = reports
+    assert report.duration >= 0.05
+    assert report.stop > 0.0
+    assert report.stop >= report.start

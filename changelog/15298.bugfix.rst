@@ -1,0 +1,1 @@
+Subtest durations and timestamps are no longer affected by tests that mock :mod:`time` (e.g. via freezegun or time-machine), matching the behavior of regular tests.
