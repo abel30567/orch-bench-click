@@ -132,6 +132,27 @@ Fixtures that were already requested before teardown started are unaffected and 
 be retrieved while they remain active, though this is discouraged.
 
 
+.. _ini-string-non-string-value:
+
+Non-string values for ``string``-typed ini options
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 9.1
+
+In the ``[tool.pytest.ini_options]`` table of ``pyproject.toml``, passing a value that is
+not a string (for example a TOML array) to an ini option registered with ``type="string"``
+is deprecated. Currently the value is returned as-is; in pytest 10 this will raise an error,
+consistent with the native TOML configuration modes.
+
+.. code-block:: toml
+
+    [tool.pytest.ini_options]
+    # Deprecated
+    my_string_option = ["a", "b"]
+    # Use instead
+    my_string_option = "a b"
+
+
 .. _config-inicfg:
 
 ``config.inicfg``
