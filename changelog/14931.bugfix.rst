@@ -1,0 +1,1 @@
+Fixed pytest's own deprecation warnings being shared module-level instances: under ``-W error`` each raise appended to the same exception's traceback, so failure reports could contain stale frames from earlier, unrelated tests. A fresh warning instance is now created for every warning.
