@@ -1093,7 +1093,11 @@ class TerminalReporter:
         if value is not None:
             return int(value)
         ini_value = self.config.getini("max_warnings")
-        if ini_value:
+        # An empty string means the option is unset; note that 0 is a valid
+        # threshold and must not be treated as unset.
+        if isinstance(ini_value, int):
+            return ini_value
+        if ini_value.strip():
             return int(ini_value)
         return None
 
