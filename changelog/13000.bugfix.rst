@@ -1,0 +1,1 @@
+Assertion-rewritten pyc files are now invalidated using a hash of the source instead of its mtime and size, so test files modified in quick succession are no longer loaded from a stale cache.
